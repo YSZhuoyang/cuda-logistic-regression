@@ -50,8 +50,6 @@ inline double activate(
 
     node->output = 1.0 / (1.0 + exp(-linearRes));
 
-    // printf( "hres: %f\n", node->output );
-    
     return node->output;
 }
 
@@ -84,39 +82,29 @@ int main()
     double alpha = 50.0;
     double* batchArr = (double*) malloc( numFeatures * sizeof( double ) );
 
-    // Array copied into video memo
-    double* instTableBuff = instTable[0].featureAttrArray;
-
     // Gradient descent
-    #pragma acc data copy(node.weights[:numFeatures + 1]) copyin(instTableBuff[:numInst * numFeatures]) create(batchArr[:numFeatures])
     do
     {
         double costSumNew = 0.0;
         memset( batchArr, 0, numFeatures * sizeof( double ) );
 
-        // #pragma acc kernels
+        for (unsigned int i = 0; i < numInst; i++)
         {
-            // #pragma acc loop
-            for (unsigned int i = 0; i < numInst; i++)
-            {
-                // double hRes = activate( &node, instTable[i].featureAttrArray );
-                double hRes = activate( &node, &instTableBuff[i * numFeatures] );
-                costSumNew += computeCost( hRes, instTable[i].classIndex );
-
-                for (unsigned int j = 0; j < numFeatures; j++)
-                    batchArr[j] += (hRes - (double) instTable[i].classIndex) * node.inputs[j];
-            }
-
-            deltaCostSum = costSumPre - costSumNew;
-            costSumPre = costSumNew;
-
-            printf( "Delta cost: %f\n", deltaCostSum );
-
-            // Update weights
-            // #pragma acc loop
+            double hRes = activate( &node, instTable[i].featureAttrArray );
+            double diff = hRes - (double) instTable[i].classIndex;
+            costSumNew += computeCost( hRes, instTable[i].classIndex );
             for (unsigned int j = 0; j < numFeatures; j++)
-                node.weights[j] -= alpha / (double) numInst * batchArr[j];
+                batchArr[j] += diff * node.inputs[j];
         }
+
+        deltaCostSum = costSumPre - costSumNew;
+        costSumPre = costSumNew;
+
+        printf( "Delta cost: %f\n", deltaCostSum );
+
+        // Update weights
+        for (unsigned int j = 0; j < numFeatures; j++)
+            node.weights[j] -= alpha / (double) numInst * batchArr[j];
 
         iter++;
     }
