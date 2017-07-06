@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "node.h": "c",
+        "arffimporter.h": "c",
+        "basicdatastructures.h": "c"
+    }
+}
