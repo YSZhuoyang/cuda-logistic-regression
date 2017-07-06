@@ -2,12 +2,12 @@
 #include "Helper.h"
 
 
-bool MyHelper::Compare(
-    const MiniInstance& eleX, 
-    const MiniInstance& eleY )
-{
-    return eleX.featureValue < eleY.featureValue;
-}
+// bool MyHelper::Compare(
+//     const MiniInstance& eleX, 
+//     const MiniInstance& eleY )
+// {
+//     return eleX.featureValue < eleY.featureValue;
+// }
 
 Instance MyHelper::Tokenize(
     const char* str, 

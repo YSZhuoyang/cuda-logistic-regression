@@ -12,7 +12,8 @@ ArffImporter::ArffImporter()
 ArffImporter::~ArffImporter()
 {
     free( instanceBuff );
-    free( instanceTable );
+    // free( instanceTable );
+    free( classIndexBuff );
 
     for (char* classAttr : classVec) free( classAttr );
     classVec.clear();
@@ -23,12 +24,14 @@ ArffImporter::~ArffImporter()
 
 void ArffImporter::BuildInstanceTable()
 {
-    if (instanceBuff != nullptr || instanceTable != nullptr)
+    if (instanceBuff != nullptr)
         return;
     
     instanceBuff =
         (double*) malloc( numInstances * numFeatures * sizeof( double ) );
-    instanceTable = (Instance*) malloc( numInstances * sizeof( Instance ) );
+    // instanceTable = (Instance*) malloc( numInstances * sizeof( Instance ) );
+    classIndexBuff =
+        (unsigned short*) malloc( numInstances * sizeof( unsigned short ) );
     for (unsigned int i = 0; i < numInstances; i++)
     {
         double* offset = instanceBuff + i * numFeatures;
@@ -36,8 +39,7 @@ void ArffImporter::BuildInstanceTable()
             offset,
             instanceVec[i].featureAttrArray,
             numFeatures * sizeof( double ) );
-        instanceTable[i].featureAttrArray = offset;
-        instanceTable[i].classIndex = instanceVec[i].classIndex;
+        classIndexBuff[i] = instanceVec[i].classIndex;
         free( instanceVec[i].featureAttrArray );
     }
 
@@ -183,6 +185,8 @@ void ArffImporter::Read( const char* fileName )
 
     numInstances = instanceVec.size();
 
+    // printf( "test\n" );
+
     fclose( fp );
     BuildInstanceTable();
 }
@@ -197,9 +201,14 @@ vector<NumericAttr> ArffImporter::GetFeatures()
     return featureVec;
 }
 
-Instance* ArffImporter::GetInstances()
+double* ArffImporter::GetInstances()
 {
-    return instanceTable;
+    return instanceBuff;
+}
+
+unsigned short* ArffImporter::GetClassIndex()
+{
+    return classIndexBuff;
 }
 
 unsigned int ArffImporter::GetNumInstances()

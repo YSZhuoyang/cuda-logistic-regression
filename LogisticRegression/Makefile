@@ -3,11 +3,11 @@
 ################################ Macros #################################
 
 SHELL = /bin/sh
+CC = g++
 # Enable debug options
 # CFLAGS = -g -Wall -std=c++11
 # Enable best optimization options
-CFLAGS = -Ofast -march=native -mtune=native -std=c++11
-CC = g++
+# CFLAGS = -Ofast -march=native -mtune=native -std=c++11
 OBJECTS = Helper.o ArffImporter.o
 
 # Enable OpenAcc
