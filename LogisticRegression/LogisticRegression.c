@@ -18,7 +18,28 @@ Node initNode( unsigned int numFeatures )
     return node;
 }
 
-inline double activate( Node* node, double* inputArr )
+void normalize(
+    vector<NumericAttr> featureVec,
+    Instance* instTable,
+    unsigned int numInst )
+{
+    unsigned int numFeatures = featureVec.size();
+
+    for (unsigned int i = 0; i < numFeatures; i++)
+    {
+        // Use either range / standard deviation
+        double range = featureVec[i].max - featureVec[i].min;
+        if (range == 0.0) continue;
+
+        for (unsigned int j = 0; j < numInst; j++)
+            instTable[j].featureAttrArray[i] =
+                (instTable[j].featureAttrArray[i] - featureVec[i].mean) / range;
+    }
+}
+
+inline double activate(
+    Node* node,
+    double* inputArr )
 {
     double linearRes = node->weights[node->numFeatures];
     node->inputs = inputArr;
@@ -29,7 +50,7 @@ inline double activate( Node* node, double* inputArr )
 
     node->output = 1.0 / (1.0 + exp(-linearRes));
 
-    // printf( "lres: %f\n", linearRes );
+    // printf( "hres: %f\n", node->output );
     
     return node->output;
 }
@@ -53,41 +74,53 @@ int main()
     vector<NumericAttr> featureVec = trainSetImporter.GetFeatures();
     unsigned int numFeatures = featureVec.size();
 
+    normalize( featureVec, instTable, numInst );
+
     Node node = initNode( numFeatures );
     unsigned int iter = 0;
-    unsigned int maxIter = 1;
-    double costSum = 0.0;
-    double alpha = 1.0;
+    unsigned int maxIter = 2000;
+    double costSumPre = 0.0;
+    double deltaCostSum = 0.0;
+    double alpha = 50.0;
     double* batchArr = (double*) malloc( numFeatures * sizeof( double ) );
 
+    // Array copied into video memo
+    double* instTableBuff = instTable[0].featureAttrArray;
+
     // Gradient descent
+    #pragma acc data copy(node.weights[:numFeatures + 1]) copyin(instTableBuff[:numInst * numFeatures]) create(batchArr[:numFeatures])
     do
     {
-        costSum = 0.0;
+        double costSumNew = 0.0;
         memset( batchArr, 0, numFeatures * sizeof( double ) );
 
-        for (unsigned int i = 0; i < numInst; i++)
+        // #pragma acc kernels
         {
-            double hRes = activate( &node, instTable[i].featureAttrArray );
-            double cost = computeCost( hRes, instTable[i].classIndex );
-            costSum += cost;
+            // #pragma acc loop
+            for (unsigned int i = 0; i < numInst; i++)
+            {
+                // double hRes = activate( &node, instTable[i].featureAttrArray );
+                double hRes = activate( &node, &instTableBuff[i * numFeatures] );
+                costSumNew += computeCost( hRes, instTable[i].classIndex );
 
-            // printf( "hres: %f\n", hRes );
+                for (unsigned int j = 0; j < numFeatures; j++)
+                    batchArr[j] += (hRes - (double) instTable[i].classIndex) * node.inputs[j];
+            }
 
+            deltaCostSum = costSumPre - costSumNew;
+            costSumPre = costSumNew;
+
+            printf( "Delta cost: %f\n", deltaCostSum );
+
+            // Update weights
+            // #pragma acc loop
             for (unsigned int j = 0; j < numFeatures; j++)
-                batchArr[j] += cost * node.inputs[j];
+                node.weights[j] -= alpha / (double) numInst * batchArr[j];
         }
 
-        printf( "cost: %f\n", costSum );
-
-        // UpdateWeights
-        for (unsigned int j = 0; j < numFeatures; j++)
-        {
-            printf( "test delta %f\n", batchArr[j] );
-            node.weights[j] -= alpha / (double) numInst * batchArr[j];
-        }
+        iter++;
     }
-    while (costSum > 1.0 && iter++ < maxIter);
-    
+    while (iter == 1 || (deltaCostSum > 1.0 && iter < maxIter));
+
     return 0;
 }

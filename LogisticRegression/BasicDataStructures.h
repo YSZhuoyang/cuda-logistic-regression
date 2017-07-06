@@ -28,7 +28,7 @@ namespace BasicDataStructures
         char* name;
         double min;
         double max;
-        double mean; // Not used.
+        double mean;
     };
 
     struct Node
