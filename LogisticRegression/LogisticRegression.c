@@ -99,11 +99,7 @@ int main()
 
         #pragma acc kernels
         {
-            #pragma acc loop
-            for (int i = 0; i < numFeatures; i++)
-                batchArr[i] = 0;
-
-            #pragma acc loop
+            #pragma acc loop device_type(nvidia)
             for (unsigned int i = 0; i < numInst; i++)
             {
                 // double hRes = activate( &node, &featureBuff[i * numFeatures] );
@@ -117,13 +113,13 @@ int main()
                 diffArr[i] = hRes - (double) classIndexBuff[i];
                 // double diff = hRes - (double) classIndexBuff[i];
                 // for (unsigned int j = 0; j < numFeatures; j++)
-                //     #pragma acc atomic
                 //     batchArr[j] += diff * featureBuff[i * numFeatures + j];
             }
 
-            #pragma acc loop
+            #pragma acc loop device_type(nvidia)
             for (unsigned int j = 0; j < numFeatures; j++)
             {
+                batchArr[j] = 0;
                 for (unsigned int i = 0; i < numInst; i++)
                     batchArr[j] += diffArr[i] * featureBuff[i * numFeatures + j];
                 // Update weights
