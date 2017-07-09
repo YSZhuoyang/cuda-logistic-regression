@@ -5,25 +5,25 @@
 SHELL = /bin/sh
 CC = g++
 # Enable debug options
-# CFLAGS = -g -Wall -std=c++11
+CFLAGS = -g -Wall -std=c++11
 # Enable best optimization options
 # CFLAGS = -Ofast -march=native -mtune=native -std=c++11
 OBJECTS = Helper.o ArffImporter.o
 
-# Enable OpenAcc
-PGIC = pgc++
-PGICFLAGS = -Minfo=accel -acc -fast -std=c++11
+# Enable Nvidia gpu
+NVCC = nvcc
+NVCCCFLAGS = -arch=sm_50 -std=c++11
 
 ################################ Compile ################################
 
-acc_exec: ${OBJECTS} LogisticRegression.c
-	$(PGIC) ${PGICFLAGS} -o $@ ${OBJECTS} LogisticRegression.c
+gpu_exec: ${OBJECTS} LogisticRegression.cu
+	$(NVCC) ${NVCCCFLAGS} -o $@ ${OBJECTS} LogisticRegression.cu
 
 Helper.o: Helper.c Helper.h BasicDataStructures.h
-	$(PGIC) ${PGICFLAGS} -c Helper.c
+	$(CC) ${CFLAGS} -c Helper.c
 
 ArffImporter.o: ArffImporter.cpp ArffImporter.h BasicDataStructures.h Helper.h
-	$(PGIC) ${PGICFLAGS} -c ArffImporter.cpp
+	$(CC) ${CFLAGS} -c ArffImporter.cpp
 
 # exec: ${OBJECTS} LogisticRegression.c
 # 	$(CC) ${CFLAGS} -o $@ ${OBJECTS} LogisticRegression.c
@@ -37,4 +37,4 @@ ArffImporter.o: ArffImporter.cpp ArffImporter.h BasicDataStructures.h Helper.h
 ################################# Clean #################################
 
 clean:
-	-rm -f *.o *.h.gch exec acc_exec
+	-rm -f *.o *.h.gch *exec*
