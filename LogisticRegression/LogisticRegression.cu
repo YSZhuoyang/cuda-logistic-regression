@@ -8,10 +8,20 @@
 #include <string.h>
 
 
+Node initNode( unsigned int numFeatures )
+{
+    Node node;
+    node.numFeatures = numFeatures;
+    node.weights = (double*) malloc( (numFeatures + 1) * sizeof( double ) );
+    memset( node.weights, 1, (numFeatures + 1) * sizeof( double ) );
+
+    return node;
+}
+
 void normalize(
     vector<NumericAttr> featureVec,
     double* featureBuff,
-    unsigned int numInstance )
+    unsigned int numInstances )
 {
     unsigned int numFeatures = featureVec.size();
 
@@ -21,7 +31,7 @@ void normalize(
         double range = featureVec[i].max - featureVec[i].min;
         if (range == 0.0) continue;
 
-        for (unsigned int j = 0; j < numInstance; j++)
+        for (unsigned int j = 0; j < numInstances; j++)
         {
             unsigned int featureIndex = j * numFeatures + i;
             featureBuff[featureIndex] =
@@ -52,40 +62,116 @@ __device__ double computeCost( double hRes, unsigned short y )
     // return -y * log(hRes) - (1 - y) * (1 - log(hRes));
 }
 
-__global__ void GradientDescent(
-    const unsigned int maxIter,
-    const unsigned int alpha,
-    const unsigned int numInstance,
-    const unsigned int numFeatures,
-    double* dBatchArr,
+
+__device__ int costSum;
+
+__global__ void Activate(
+    double* dDiffArr,
     double* dWeightArr,
-    double* dDiffArr )
+    double* dFeatureBuff,
+    unsigned short* dClassBuff,
+    const unsigned int numInstances,
+    const unsigned int numFeatures )
 {
     unsigned int instanceId = blockIdx.y * gridDim.x + blockIdx.x;
     unsigned int featureId = threadIdx.y * blockDim.x + threadIdx.x;
+    if (instanceId >= numInstances || featureId >= numFeatures) return;
+    // if (featureId == 0) printf( "Instance ID: %u\n", instanceId );
 
-    if (instanceId >= numInstance || featureId >= numFeatures) return;
+    double linearRes = dWeightArr[numFeatures];
+    // AtomicAdd
+    linearRes += dWeightArr[featureId] * dFeatureBuff[instanceId * numFeatures + featureId];
+    __syncthreads();
 
-    double costSumPre = 0.0;
-    double deltaCostSum = 0.0;
-    unsigned int iter = 0;
+    if (threadIdx.x > 0) return;
 
-    if (featureId == 0) printf( "Instance ID: %u\n", instanceId );
+    double hRes = 1.0 / (1.0 + exp(-linearRes));
+    dDiffArr[instanceId] = hRes - (double) dClassBuff[instanceId];
 
-    // do
+    if (threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+        printf( "Activation completed\n" );
+        // printf( "Delta cost: %f\n", deltaCostSum );
+}
+
+__global__ void UpdateWeight(
+    double* dDiffArr,
+    double* dWeightArr,
+    double* dFeatureBuff,
+    unsigned int alpha,
+    unsigned int numInstances,
+    unsigned int numFeatures )
+{
+    // One block per feature, one thread per instance
+    unsigned int featureId = blockIdx.y * gridDim.x + blockIdx.x;
+    unsigned int instanceId = threadIdx.y * blockDim.x + threadIdx.x;
+    if (instanceId >= numInstances || featureId >= numFeatures) return;
+
+    // An array of values of one feature
+    extern __shared__ double dProductShared[];
+    dProductShared[instanceId] =
+        dFeatureBuff[instanceId * numFeatures + featureId] *
+            dDiffArr[instanceId];
+    __syncthreads();
+
+    // Parallel sum
+    // Assume numInstances is big
+    for (unsigned int i = numInstances; i > 1; i /= 2)
+    {
+        if (instanceId < i / 2)
+        {
+            dProductShared[instanceId] +=
+                dProductShared[instanceId + i / 2];
+
+            // Odd
+            if (i & 1 && instanceId == i / 2 - 1)
+                dProductShared[instanceId] += dProductShared[i - 1];
+
+            // // Odd
+            // if (i & 1)
+            // {
+            //     if (instanceId == i / 2 - 1)
+            //         dProductShared[instanceId] +=
+            //             dProductShared[i - 1] + dProductShared[i - 2];
+            //     else if (instanceId < i / 2 - 1)
+            //         dProductShared[instanceId] +=
+            //             dProductShared[instanceId + i / 2];
+            // }
+            // // Even
+            // else
+            //     dProductShared[instanceId] +=
+            //         dProductShared[instanceId + i / 2];
+        }
+        __syncthreads();
+    }
+
+    // Update weights
+    if (instanceId > 0) return;
+    dWeightArr[featureId] -=
+        alpha / (double) numInstances * dProductShared[0];
+}
+
+__global__ void SumCost(
+    unsigned short* dClassIndexBuff,
+    const unsigned int numInstances )
+{
+    unsigned int instanceId = threadIdx.y * blockDim.x + threadIdx.x;
+    if (instanceId >= numInstances) return;
+
+    // Parallel sum
+    // for (unsigned int i = numInstances; i > 1; i /= 2)
     // {
-    //     double costSumNew = 0.0;
-    //     dBatchArr[featureId] = 0.0;
-    //     // memset( dBatchArr, 0, numFeatures * sizeof( double ) );
+    //     if (instanceId < i / 2)
+    //     {
+    //         dProductShared[instanceId] +=
+    //             dProductShared[instanceId + i / 2];
 
-
-    //     if (threadIdx == {0, 0, 0} && blockIdx == {0, 0, 0})
-    //         printf( "Delta cost: %f\n", deltaCostSum );
-
-    //     iter++;
-    //     // __syncthreads();
+    //         // Odd
+    //         if (i & 1 && instanceId == i / 2 - 1)
+    //             dProductShared[instanceId] += dProductShared[i - 1];
+    //     }
+    //     __syncthreads();
     // }
-    // while (iter == 1 || (deltaCostSum > 1.0 && iter < maxIter));
+    // dCostSumArr += computeCost( hRes, dClassIndexBuff[i] );
 }
 
 void cudaErrorCheck( cudaError_t cudaRes )
@@ -105,114 +191,150 @@ int main()
     // ArffImporter testSetImporter;
     // testSetImporter.Read( "Dataset/test/dev-first1000.arff" );
 
-    unsigned int numInstance = trainSetImporter.GetNumInstances();
+    unsigned int numInstances = trainSetImporter.GetNumInstances();
     double* featureBuff = trainSetImporter.GetInstances();
     unsigned short* classIndexBuff = trainSetImporter.GetClassIndex();
     vector<NumericAttr> featureVec = trainSetImporter.GetFeatures();
     unsigned int numFeatures = featureVec.size();
 
-    // unsigned int numInstance = 25000;
+    // unsigned int numInstances = 25000;
     // unsigned int numFeatures = 1000;
     unsigned int alpha = 50;
-    unsigned int maxIter = 1000;
+    unsigned int maxIter = 1;
+    unsigned int iter = 0;
+    // double costSumPre = 0.0;
+    // double costSumNew;
 
     // Determine block and grid size
-    dim3 blockStruct;
-    dim3 gridStruct;
-    if (numInstance < 1024) gridStruct.x = numInstance;
+    dim3 actBlockDim;
+    dim3 actGridDim;
+    dim3 sumCostBlockDim;
+    dim3 uwBlockDim;
+    dim3 uwGridDim;
+    if (numInstances < 1024)
+    {
+        actGridDim.x = numInstances;
+        sumCostBlockDim.x = numInstances;
+    }
     else
     {
-        gridStruct.x = 1024;
-        gridStruct.y = (numInstance + gridStruct.x - 1) / gridStruct.x;
+        actGridDim.x = 1024;
+        actGridDim.y = (numInstances + actGridDim.x - 1) / actGridDim.x;
+        sumCostBlockDim.x = 1024;
+        sumCostBlockDim.y = (numInstances + sumCostBlockDim.x - 1) / sumCostBlockDim.x;
     }
 
-    if (numFeatures < 1024) blockStruct.x = numFeatures;
+    if (numFeatures < 1024) actBlockDim.x = numFeatures;
     else
     {
-        blockStruct.x = 1024;
-        blockStruct.y = (numFeatures + blockStruct.x - 1) / blockStruct.x;
+        actBlockDim.x = 1024;
+        actBlockDim.y = (numFeatures + actBlockDim.x - 1) / actBlockDim.x;
     }
 
-    // normalize( featureVec, featureBuff, numInstance );
+    uwBlockDim = actGridDim;
+    uwGridDim = actBlockDim;
 
-    // Node node = initNode( numFeatures );
+    normalize( featureVec, featureBuff, numInstances );
+    Node node = initNode( numFeatures );
 
-
-    double* dBatchArr;
     double* dWeightArr;
     double* dDiffArr;
     double* dFeatureBuff;
     unsigned short* dClassBuff;
-    cudaErrorCheck( cudaMalloc( (void**) &dBatchArr, numFeatures * sizeof( double ) ) );
-    cudaErrorCheck( cudaMalloc( (void**) &dWeightArr, numFeatures * sizeof( double ) ) );
-    cudaErrorCheck( cudaMalloc( (void**) &dDiffArr, numInstance * sizeof( double ) ) );
-    cudaErrorCheck( cudaMalloc( (void**) &dFeatureBuff, numInstance * numFeatures * sizeof( double ) ) );
-    cudaErrorCheck( cudaMalloc( (void**) &dClassBuff, numInstance * sizeof( unsigned short ) ) );
+    cudaErrorCheck( cudaMalloc( (void**) &dWeightArr, (numFeatures + 1) * sizeof( double ) ) );
+    cudaErrorCheck( cudaMalloc( (void**) &dDiffArr, numInstances * sizeof( double ) ) );
+    cudaErrorCheck( cudaMalloc( (void**) &dFeatureBuff, numInstances * numFeatures * sizeof( double ) ) );
+    cudaErrorCheck( cudaMalloc( (void**) &dClassBuff, numInstances * sizeof( unsigned short ) ) );
+
+    cudaErrorCheck( cudaMemcpy(
+        dFeatureBuff,
+        featureBuff,
+        numInstances * numFeatures * sizeof( double ),
+        cudaMemcpyHostToDevice ) );
+    cudaErrorCheck( cudaMemcpy(
+        dWeightArr,
+        node.weights,
+        (numFeatures + 1) * sizeof( double ),
+        cudaMemcpyHostToDevice ) );
 
     printf( "\nStart gradient descent...\n" );
 
-    GradientDescent<<< gridStruct, blockStruct >>>(
-        maxIter,
-        alpha,
-        numInstance,
-        numFeatures,
-        dBatchArr,
-        dWeightArr,
-        dDiffArr
-    );
-
     // Gradient descent
-    // do
-    // {
-    //     double costSumNew = 0.0;
-    //     memset( batchArr, 0, numFeatures * sizeof( double ) );
+    do
+    {
+        Activate<<< actGridDim, actBlockDim >>>(
+            dDiffArr,
+            dWeightArr,
+            dFeatureBuff,
+            dClassBuff,
+            numInstances,
+            numFeatures );
+        cudaErrorCheck( cudaDeviceSynchronize() );
 
-    //     for (unsigned int i = 0; i < numInstance; i++)
-    //     {
-    //         // double hRes = activate( &node, &featureBuff[i * numFeatures] );
+        // SumCost<<< 1, sumCostBlockDim >>>();
+        // cudaDeviceSynchronize();
+        // cudaMemcpy(costSumNew);
 
-    //         double linearRes = weightBuff[numFeatures];
-    //         for (unsigned int j = 0; j < numFeatures; j++)
-    //             linearRes += weightBuff[j] * featureBuff[i * numFeatures + j];
+        UpdateWeight<<< uwGridDim, uwBlockDim, numInstances * sizeof( double ) >>>(
+            dDiffArr,
+            dWeightArr,
+            dFeatureBuff,
+            alpha,
+            numInstances,
+            numFeatures );
 
-    //         double hRes = 1.0 / (1.0 + exp(-linearRes));
-    //         costSumNew += computeCost( hRes, classIndexBuff[i] );
-    //         diffArr[i] = hRes - (double) classIndexBuff[i];
-    //         // double diff = hRes - (double) classIndexBuff[i];
-    //         // for (unsigned int j = 0; j < numFeatures; j++)
-    //         //     batchArr[j] += diff * featureBuff[i * numFeatures + j];
-    //     }
+        // memset( batchArr, 0, numFeatures * sizeof( double ) );
 
-    //     for (unsigned int j = 0; j < numFeatures; j++)
-    //     {
-    //         batchArr[j] = 0;
-    //         for (unsigned int i = 0; i < numInstance; i++)
-    //             batchArr[j] += diffArr[i] * featureBuff[i * numFeatures + j];
-    //         // Update weights
-    //         weightBuff[j] -= alpha / (double) numInstance * batchArr[j];
-    //     }
+        // for (unsigned int i = 0; i < numInstances; i++)
+        // {
+        //     // double hRes = activate( &node, &featureBuff[i * numFeatures] );
 
-    //     deltaCostSum = costSumPre - costSumNew;
-    //     costSumPre = costSumNew;
+        //     double linearRes = weightBuff[numFeatures];
+        //     for (unsigned int j = 0; j < numFeatures; j++)
+        //         linearRes += weightBuff[j] * featureBuff[i * numFeatures + j];
 
-    //     printf( "Delta cost: %f\n", deltaCostSum );
-    //     // printf( "Pre cost: %f\n", costSumPre );
-    //     // printf( "New cost: %f\n", costSumNew );
+        //     double hRes = 1.0 / (1.0 + exp(-linearRes));
+        //     costSumNew += computeCost( hRes, classIndexBuff[i] );
+        //     diffArr[i] = hRes - (double) classIndexBuff[i];
+        //     // double diff = hRes - (double) classIndexBuff[i];
+        //     // for (unsigned int j = 0; j < numFeatures; j++)
+        //     //     batchArr[j] += diff * featureBuff[i * numFeatures + j];
+        // }
 
-    //     // Update weights
-    //     // #pragma acc kernels loop
-    //     // for (unsigned int j = 0; j < numFeatures; j++)
-    //     //     weightBuff[j] -= alpha / (double) numInstance * batchArr[j];
+        // for (unsigned int j = 0; j < numFeatures; j++)
+        // {
+        //     batchArr[j] = 0;
+        //     for (unsigned int i = 0; i < numInstances; i++)
+        //         batchArr[j] += diffArr[i] * featureBuff[i * numFeatures + j];
+        //     // Update weights
+        //     weightBuff[j] -= alpha / (double) numInstances * batchArr[j];
+        // }
 
-    //     iter++;
-    // }
+        // deltaCostSum = costSumPre - costSumNew;
+        // costSumPre = costSumNew;
+
+        // printf( "Delta cost: %f\n", deltaCostSum );
+        // printf( "Pre cost: %f\n", costSumPre );
+        // printf( "New cost: %f\n", costSumNew );
+
+        // Update weights
+        // #pragma acc kernels loop
+        // for (unsigned int j = 0; j < numFeatures; j++)
+        //     weightBuff[j] -= alpha / (double) numInstances * batchArr[j];
+
+        iter++;
+    }
     // while (iter == 1 || (deltaCostSum > 1.0 && iter < maxIter));
+    while (iter == 1 || iter < maxIter);
+
+    // cudaMemcpy(weight);
 
     cudaDeviceSynchronize();
 
-    cudaFree(dBatchArr);
-    cudaFree(dWeightArr);
-    cudaFree(dDiffArr);
+    cudaFree( dFeatureBuff );
+    cudaFree( dClassBuff );
+    cudaFree( dWeightArr );
+    cudaFree( dDiffArr );
 
     return 0;
 }
