@@ -64,10 +64,10 @@ __device__ double activate(
 //     // return -y * log(hRes) - (1 - y) * (1 - log(hRes));
 // }
 
-__device__ void parallelSum(
+__forceinline__ __device__ void parallelSum(
     double* dProductArr,
-    unsigned int elementId,
-    unsigned int length )
+    const unsigned int elementId,
+    const unsigned int length )
 {
     if (length <= 1024)
         for (unsigned int i = length; i > 1; i /= 2)
@@ -103,6 +103,7 @@ __global__ void Activate(
     if (instanceId >= numInstances || featureId >= numFeatures) return;
     // if (featureId == 0) printf( "Instance ID: %u\n", instanceId );
 
+    double hRes = dWeightArr[numFeatures];
     extern __shared__ double dProductShared[];
     dProductShared[featureId] =
         dWeightArr[featureId] * dFeatureBuff[instanceId * numFeatures + featureId];
@@ -112,14 +113,14 @@ __global__ void Activate(
     // Assume numFeatures is big
     parallelSum( dProductShared, featureId, numFeatures );
 
-    double linearRes = 0.0;
+    // double linearRes = 0.0;
     // cublasDdot( cublasHandle, numFeatures, &dFeatureBuff[instanceId * numFeatures], 1, dWeightArr, 1, &linearRes );
-    linearRes += dWeightArr[numFeatures];
+    // linearRes += dWeightArr[numFeatures];
 
     if (featureId > 0) return;
 
-    linearRes += dProductShared[0];
-    double hRes = 1.0 / (1.0 + exp(-linearRes));
+    hRes += dProductShared[0];
+    hRes = 1.0 / (1.0 + exp(-hRes));
     dDiffArr[instanceId] = hRes - (double) dClassBuff[instanceId];
 
     // if (instanceId == 20000)
@@ -147,13 +148,9 @@ __global__ void UpdateWeight(
 
     // An array of values of one feature
     extern __shared__ double dProductShared[];
-    // dProductShared[instanceId] =
-    //     dFeatureBuff[instanceId * numFeatures + featureId] *
-    //         dDiffArr[instanceId];
     dProductShared[instChunkId] = 0.0;
     for (unsigned int i = chunkSize * instChunkId; i < stopId; i++)
-        dProductShared[instChunkId] +=
-            dFeatureBuff[i * numFeatures + featureId] * dDiffArr[i];
+        dProductShared[instChunkId] += dFeatureBuff[i * numFeatures + featureId] * dDiffArr[i];
     __syncthreads();
 
     // Parallel sum
@@ -179,7 +176,7 @@ __global__ void UpdateWeight(
 //     // Parallel sum
 // }
 
-void cudaErrorCheck( cudaError_t cudaRes )
+inline void cudaErrorCheck( cudaError_t cudaRes )
 {
     if (cudaRes != cudaSuccess)
         printf(
@@ -242,7 +239,7 @@ int main()
         actBlockDim.y = (numFeatures + actBlockDim.x - 1) / actBlockDim.x;
     }
 
-    uwBlockDim.x = actGridDim.x;
+    uwBlockDim.x = 1000;
     uwGridDim = actBlockDim;
     unsigned int uwChunkSize = numInstances / uwBlockDim.x;
 
@@ -286,18 +283,18 @@ int main()
     // Gradient descent
     do
     {
-        Activate<<< actGridDim, actBlockDim, numFeatures * sizeof( double )  >>>(
+        Activate<<< actGridDim, actBlockDim, numFeatures * sizeof( double ) >>>(
             dDiffArr,
             dWeightArr,
             dFeatureBuff,
             dClassBuff,
             numInstances,
             numFeatures );//cublasHandle
-        cudaErrorCheck( cudaGetLastError() );
-        cudaErrorCheck( cudaDeviceSynchronize() );
+        // cudaErrorCheck( cudaGetLastError() );
+        cudaErrorCheck( cudaThreadSynchronize() );
 
         // SumCost<<< 1, sumCostBlockDim >>>();
-        // cudaDeviceSynchronize();
+        // cudaErrorCheck( cudaThreadSynchronize() );
         // cudaMemcpy(costSumNew);
 
         UpdateWeight<<< uwGridDim, uwBlockDim, uwBlockDim.x * sizeof( double ) >>>(
@@ -308,61 +305,22 @@ int main()
             uwChunkSize,
             numInstances,
             numFeatures );
-        cudaErrorCheck( cudaGetLastError() );
-        cudaErrorCheck( cudaDeviceSynchronize() );
-
-        // memset( batchArr, 0, numFeatures * sizeof( double ) );
-
-        // for (unsigned int i = 0; i < numInstances; i++)
-        // {
-        //     // double hRes = activate( &node, &featureBuff[i * numFeatures] );
-
-        //     double linearRes = weightBuff[numFeatures];
-        //     for (unsigned int j = 0; j < numFeatures; j++)
-        //         linearRes += weightBuff[j] * featureBuff[i * numFeatures + j];
-
-        //     double hRes = 1.0 / (1.0 + exp(-linearRes));
-        //     costSumNew += computeCost( hRes, classIndexBuff[i] );
-        //     diffArr[i] = hRes - (double) classIndexBuff[i];
-        //     // double diff = hRes - (double) classIndexBuff[i];
-        //     // for (unsigned int j = 0; j < numFeatures; j++)
-        //     //     batchArr[j] += diff * featureBuff[i * numFeatures + j];
-        // }
-
-        // for (unsigned int j = 0; j < numFeatures; j++)
-        // {
-        //     batchArr[j] = 0;
-        //     for (unsigned int i = 0; i < numInstances; i++)
-        //         batchArr[j] += diffArr[i] * featureBuff[i * numFeatures + j];
-        //     // Update weights
-        //     weightBuff[j] -= alpha / (double) numInstances * batchArr[j];
-        // }
-
-        // deltaCostSum = costSumPre - costSumNew;
-        // costSumPre = costSumNew;
-
-        // printf( "Delta cost: %f\n", deltaCostSum );
-        // printf( "Pre cost: %f\n", costSumPre );
-        // printf( "New cost: %f\n", costSumNew );
-
-        // Update weights
-        // #pragma acc kernels loop
-        // for (unsigned int j = 0; j < numFeatures; j++)
-        //     weightBuff[j] -= alpha / (double) numInstances * batchArr[j];
+        // cudaErrorCheck( cudaGetLastError() );
+        cudaErrorCheck( cudaThreadSynchronize() );
 
         iter++;
     }
     // while (iter == 1 || (deltaCostSum > 1.0 && iter < maxIter));
     while (iter == 1 || iter < maxIter);
 
+    // cudaMemcpy(weight);
+    // cublasErrorCheck( cublasDestroy( cublasHandle ) );
+    // cudaErrorCheck( cudaThreadSynchronize() );
+
     time( &end );
     dif = difftime( end, start );
 
     printf( "Time taken is %.2lf seconds.\n", dif );
-    
-    // cudaMemcpy(weight);
-    // cublasErrorCheck( cublasDestroy( cublasHandle ) );
-    cudaDeviceSynchronize();
 
     cudaFree( dFeatureBuff );
     cudaFree( dClassBuff );
