@@ -1,4 +1,3 @@
-
 #include "Helper.h"
 #include "ArffImporter.h"
 
@@ -19,9 +18,9 @@ Node initNode( unsigned int numFeatures )
 }
 
 void normalize(
-    vector<NumericAttr> featureVec,
+    std::vector<NumericAttr> featureVec,
     double* featureBuff,
-    unsigned int numInst )
+    unsigned int numInstances )
 {
     unsigned int numFeatures = featureVec.size();
 
@@ -31,7 +30,7 @@ void normalize(
         double range = featureVec[i].max - featureVec[i].min;
         if (range == 0.0) continue;
 
-        for (unsigned int j = 0; j < numInst; j++)
+        for (unsigned int j = 0; j < numInstances; j++)
         {
             unsigned int featureIndex = j * numFeatures + i;
             featureBuff[featureIndex] =
@@ -73,78 +72,56 @@ int main()
     unsigned int numInst = trainSetImporter.GetNumInstances();
     double* featureBuff = trainSetImporter.GetInstances();
     unsigned short* classIndexBuff = trainSetImporter.GetClassIndex();
-    vector<NumericAttr> featureVec = trainSetImporter.GetFeatures();
+    std::vector<NumericAttr> featureVec = trainSetImporter.GetFeatures();
     unsigned int numFeatures = featureVec.size();
 
     normalize( featureVec, featureBuff, numInst );
 
     Node node = initNode( numFeatures );
     unsigned int iter = 0;
-    unsigned int maxIter = 2000;
+    unsigned int maxIter = 200;
     double costSumPre = 0.0;
     double deltaCostSum = 0.0;
     double alpha = 50.0;
     double* batchArr = (double*) malloc( numFeatures * sizeof( double ) );
-    double* diffArr = (double*) malloc( numInst * sizeof( double ) );
 
-    // Array copied into video memo
-    double* weightBuff = node.weights;
-
+    time_t start, end;
+    double dif;
+    time( &start );
+    
     // Gradient descent
-    #pragma acc data copy(weightBuff[:numFeatures + 1]) copyin(featureBuff[:numInst * numFeatures], classIndexBuff[:numInst]) create(batchArr[:numFeatures], diffArr[:numInst])
     do
     {
         double costSumNew = 0.0;
-        // memset( batchArr, 0, numFeatures * sizeof( double ) );
+        memset( batchArr, 0, numFeatures * sizeof( double ) );
 
-        #pragma acc kernels
+        for (unsigned int i = 0; i < numInst; i++)
         {
-            #pragma acc loop device_type(nvidia)
-            for (unsigned int i = 0; i < numInst; i++)
-            {
-                // double hRes = activate( &node, &featureBuff[i * numFeatures] );
-
-                double linearRes = weightBuff[numFeatures];
-                for (unsigned int j = 0; j < numFeatures; j++)
-                    linearRes += weightBuff[j] * featureBuff[i * numFeatures + j];
-
-                double hRes = 1.0 / (1.0 + exp(-linearRes));
-                costSumNew += computeCost( hRes, classIndexBuff[i] );
-                diffArr[i] = hRes - (double) classIndexBuff[i];
-                // double diff = hRes - (double) classIndexBuff[i];
-                // for (unsigned int j = 0; j < numFeatures; j++)
-                //     batchArr[j] += diff * featureBuff[i * numFeatures + j];
-            }
-
-            #pragma acc loop device_type(nvidia)
+            double hRes = activate( &node, &featureBuff[i * numFeatures] );
+            double diff = hRes - (double) classIndexBuff[i];
+            costSumNew += computeCost( hRes, classIndexBuff[i] );
             for (unsigned int j = 0; j < numFeatures; j++)
-            {
-                batchArr[j] = 0;
-                for (unsigned int i = 0; i < numInst; i++)
-                    batchArr[j] += diffArr[i] * featureBuff[i * numFeatures + j];
-                // Update weights
-                weightBuff[j] -= alpha / (double) numInst * batchArr[j];
-            }
+                batchArr[j] += diff * node.inputs[j];
         }
 
         deltaCostSum = costSumPre - costSumNew;
         costSumPre = costSumNew;
 
-        printf( "Delta cost: %f\n", deltaCostSum );
-        // printf( "Pre cost: %f\n", costSumPre );
-        // printf( "New cost: %f\n", costSumNew );
+        // printf( "Delta cost: %f\n", deltaCostSum );
 
         // Update weights
-        // #pragma acc kernels loop
-        // for (unsigned int j = 0; j < numFeatures; j++)
-        //     weightBuff[j] -= alpha / (double) numInst * batchArr[j];
-
+        printf( "Weight: %f\n", node.weights[0] );
+        for (unsigned int j = 0; j < numFeatures; j++)
+            node.weights[j] -= alpha / (double) numInst * batchArr[j];
+        
         iter++;
     }
     while (iter == 1 || (deltaCostSum > 1.0 && iter < maxIter));
 
-    free( batchArr );
-    free( diffArr );
+    time( &end );
+    dif = difftime( end, start );
 
+    printf( "Time taken is %.2lf seconds.\n", dif );
+    
     return 0;
 }

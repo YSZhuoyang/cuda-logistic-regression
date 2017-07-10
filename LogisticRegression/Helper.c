@@ -11,7 +11,7 @@
 
 Instance MyHelper::Tokenize(
     const char* str, 
-    const vector<NumericAttr>& featureVec )
+    const std::vector<NumericAttr>& featureVec )
 {
     unsigned int numFeatures = featureVec.size();
     Instance instance;
@@ -95,7 +95,7 @@ unsigned int MyHelper::getIndexOfMax(
     const unsigned int* uintArray, 
     const unsigned int length )
 {
-    return max_element( uintArray, uintArray + length ) - uintArray;
+    return std::max_element( uintArray, uintArray + length ) - uintArray;
 }
 
 unsigned int MyHelper::removeDuplicates(

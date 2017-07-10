@@ -191,12 +191,12 @@ void ArffImporter::Read( const char* fileName )
     BuildInstanceTable();
 }
 
-vector<char*> ArffImporter::GetClassAttr()
+std::vector<char*> ArffImporter::GetClassAttr()
 {
     return classVec;
 }
 
-vector<NumericAttr> ArffImporter::GetFeatures()
+std::vector<NumericAttr> ArffImporter::GetFeatures()
 {
     return featureVec;
 }

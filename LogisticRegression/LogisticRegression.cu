@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+// #include "cublas_v2.h"
 
 
 Node initNode( unsigned int numFeatures )
@@ -13,13 +14,14 @@ Node initNode( unsigned int numFeatures )
     Node node;
     node.numFeatures = numFeatures;
     node.weights = (double*) malloc( (numFeatures + 1) * sizeof( double ) );
-    memset( node.weights, 1, (numFeatures + 1) * sizeof( double ) );
+    memset( node.weights, 1.0, (numFeatures + 1) * sizeof( double ) );
+    // printf( "weight: %f\n", node.weights[0] );
 
     return node;
 }
 
 void normalize(
-    vector<NumericAttr> featureVec,
+    std::vector<NumericAttr> featureVec,
     double* featureBuff,
     unsigned int numInstances )
 {
@@ -56,123 +58,126 @@ __device__ double activate(
     return node->output;
 }
 
-__device__ double computeCost( double hRes, unsigned short y )
+// __device__ double computeCost( double hRes, unsigned short y )
+// {
+//     return (y)? -log(hRes) : -log(1.0 - hRes);
+//     // return -y * log(hRes) - (1 - y) * (1 - log(hRes));
+// }
+
+__device__ void parallelSum(
+    double* dProductArr,
+    unsigned int elementId,
+    unsigned int length )
 {
-    return (y)? -log(hRes) : -log(1.0 - hRes);
-    // return -y * log(hRes) - (1 - y) * (1 - log(hRes));
+    if (length <= 1024)
+        for (unsigned int i = length; i > 1; i /= 2)
+        {
+            if (elementId < i / 2)
+            {
+                dProductArr[elementId] +=
+                    dProductArr[elementId + i / 2];
+
+                // Odd
+                if (i & 1 && elementId == i / 2 - 1)
+                    dProductArr[elementId] += dProductArr[i - 1];
+            }
+            __syncthreads();
+        }
+    else
+    {
+
+    }
 }
-
-
-__device__ int costSum;
 
 __global__ void Activate(
     double* dDiffArr,
     double* dWeightArr,
-    double* dFeatureBuff,
-    unsigned short* dClassBuff,
+    const double* dFeatureBuff,
+    const unsigned short* dClassBuff,
     const unsigned int numInstances,
     const unsigned int numFeatures )
+    // const cublasHandle_t cublasHandle
 {
     unsigned int instanceId = blockIdx.y * gridDim.x + blockIdx.x;
     unsigned int featureId = threadIdx.y * blockDim.x + threadIdx.x;
     if (instanceId >= numInstances || featureId >= numFeatures) return;
     // if (featureId == 0) printf( "Instance ID: %u\n", instanceId );
 
-    double linearRes = dWeightArr[numFeatures];
-    // AtomicAdd
-    linearRes += dWeightArr[featureId] * dFeatureBuff[instanceId * numFeatures + featureId];
+    extern __shared__ double dProductShared[];
+    dProductShared[featureId] =
+        dWeightArr[featureId] * dFeatureBuff[instanceId * numFeatures + featureId];
     __syncthreads();
 
-    if (threadIdx.x > 0) return;
+    // Parallel sum
+    // Assume numFeatures is big
+    parallelSum( dProductShared, featureId, numFeatures );
 
+    double linearRes = 0.0;
+    // cublasDdot( cublasHandle, numFeatures, &dFeatureBuff[instanceId * numFeatures], 1, dWeightArr, 1, &linearRes );
+    linearRes += dWeightArr[numFeatures];
+
+    if (featureId > 0) return;
+
+    linearRes += dProductShared[0];
     double hRes = 1.0 / (1.0 + exp(-linearRes));
     dDiffArr[instanceId] = hRes - (double) dClassBuff[instanceId];
 
-    if (threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0)
-        printf( "Activation completed\n" );
-        // printf( "Delta cost: %f\n", deltaCostSum );
+    // if (instanceId == 20000)
+    //     printf( "Activation completed, hRes: %f\n", dDiffArr[instanceId] );
 }
 
 __global__ void UpdateWeight(
     double* dDiffArr,
     double* dWeightArr,
-    double* dFeatureBuff,
-    unsigned int alpha,
-    unsigned int numInstances,
-    unsigned int numFeatures )
+    const double* dFeatureBuff,
+    const unsigned int alpha,
+    const unsigned int chunkSize,
+    const unsigned int numInstances,
+    const unsigned int numFeatures )
 {
     // One block per feature, one thread per instance
     unsigned int featureId = blockIdx.y * gridDim.x + blockIdx.x;
-    unsigned int instanceId = threadIdx.y * blockDim.x + threadIdx.x;
-    if (instanceId >= numInstances || featureId >= numFeatures) return;
+    unsigned int instChunkId = threadIdx.y * blockDim.x + threadIdx.x;
+    if (instChunkId >= numInstances || featureId >= numFeatures) return;
+
+    unsigned int stopId = chunkSize * (instChunkId + 1);
+    // Last chunk
+    if (instChunkId == blockDim.x - 1)
+        stopId = numInstances;
 
     // An array of values of one feature
     extern __shared__ double dProductShared[];
-    dProductShared[instanceId] =
-        dFeatureBuff[instanceId * numFeatures + featureId] *
-            dDiffArr[instanceId];
+    // dProductShared[instanceId] =
+    //     dFeatureBuff[instanceId * numFeatures + featureId] *
+    //         dDiffArr[instanceId];
+    dProductShared[instChunkId] = 0.0;
+    for (unsigned int i = chunkSize * instChunkId; i < stopId; i++)
+        dProductShared[instChunkId] +=
+            dFeatureBuff[i * numFeatures + featureId] * dDiffArr[i];
     __syncthreads();
 
     // Parallel sum
     // Assume numInstances is big
-    for (unsigned int i = numInstances; i > 1; i /= 2)
-    {
-        if (instanceId < i / 2)
-        {
-            dProductShared[instanceId] +=
-                dProductShared[instanceId + i / 2];
-
-            // Odd
-            if (i & 1 && instanceId == i / 2 - 1)
-                dProductShared[instanceId] += dProductShared[i - 1];
-
-            // // Odd
-            // if (i & 1)
-            // {
-            //     if (instanceId == i / 2 - 1)
-            //         dProductShared[instanceId] +=
-            //             dProductShared[i - 1] + dProductShared[i - 2];
-            //     else if (instanceId < i / 2 - 1)
-            //         dProductShared[instanceId] +=
-            //             dProductShared[instanceId + i / 2];
-            // }
-            // // Even
-            // else
-            //     dProductShared[instanceId] +=
-            //         dProductShared[instanceId + i / 2];
-        }
-        __syncthreads();
-    }
+    parallelSum( dProductShared, instChunkId, blockDim.x );
 
     // Update weights
-    if (instanceId > 0) return;
+    if (instChunkId > 0) return;
     dWeightArr[featureId] -=
         alpha / (double) numInstances * dProductShared[0];
+
+    if (featureId == 0)
+        printf( "Updating weights completed, weight: %f\n", dWeightArr[0] );
 }
 
-__global__ void SumCost(
-    unsigned short* dClassIndexBuff,
-    const unsigned int numInstances )
-{
-    unsigned int instanceId = threadIdx.y * blockDim.x + threadIdx.x;
-    if (instanceId >= numInstances) return;
+// __global__ void SumCost(
+//     unsigned short* dClassIndexBuff,
+//     const unsigned int numInstances )
+// {
+//     unsigned int instanceId = threadIdx.y * blockDim.x + threadIdx.x;
+//     if (instanceId >= numInstances) return;
 
-    // Parallel sum
-    // for (unsigned int i = numInstances; i > 1; i /= 2)
-    // {
-    //     if (instanceId < i / 2)
-    //     {
-    //         dProductShared[instanceId] +=
-    //             dProductShared[instanceId + i / 2];
-
-    //         // Odd
-    //         if (i & 1 && instanceId == i / 2 - 1)
-    //             dProductShared[instanceId] += dProductShared[i - 1];
-    //     }
-    //     __syncthreads();
-    // }
-    // dCostSumArr += computeCost( hRes, dClassIndexBuff[i] );
-}
+//     // Parallel sum
+// }
 
 void cudaErrorCheck( cudaError_t cudaRes )
 {
@@ -182,6 +187,12 @@ void cudaErrorCheck( cudaError_t cudaRes )
             cudaGetErrorString( cudaRes )
         );
 }
+
+// void cublasErrorCheck( cublasStatus_t cublasRes )
+// {
+//     if (cublasRes != CUBLAS_STATUS_SUCCESS)
+//         printf( "Cublas library failed to load.\n" );
+// }
 
 int main()
 {
@@ -194,13 +205,13 @@ int main()
     unsigned int numInstances = trainSetImporter.GetNumInstances();
     double* featureBuff = trainSetImporter.GetInstances();
     unsigned short* classIndexBuff = trainSetImporter.GetClassIndex();
-    vector<NumericAttr> featureVec = trainSetImporter.GetFeatures();
+    std::vector<NumericAttr> featureVec = trainSetImporter.GetFeatures();
     unsigned int numFeatures = featureVec.size();
 
     // unsigned int numInstances = 25000;
     // unsigned int numFeatures = 1000;
     unsigned int alpha = 50;
-    unsigned int maxIter = 1;
+    unsigned int maxIter = 200;
     unsigned int iter = 0;
     // double costSumPre = 0.0;
     // double costSumNew;
@@ -231,14 +242,15 @@ int main()
         actBlockDim.y = (numFeatures + actBlockDim.x - 1) / actBlockDim.x;
     }
 
-    uwBlockDim = actGridDim;
+    uwBlockDim.x = actGridDim.x;
     uwGridDim = actBlockDim;
+    unsigned int uwChunkSize = numInstances / uwBlockDim.x;
 
     normalize( featureVec, featureBuff, numInstances );
     Node node = initNode( numFeatures );
 
-    double* dWeightArr;
     double* dDiffArr;
+    double* dWeightArr;
     double* dFeatureBuff;
     unsigned short* dClassBuff;
     cudaErrorCheck( cudaMalloc( (void**) &dWeightArr, (numFeatures + 1) * sizeof( double ) ) );
@@ -256,32 +268,48 @@ int main()
         node.weights,
         (numFeatures + 1) * sizeof( double ),
         cudaMemcpyHostToDevice ) );
+    cudaErrorCheck( cudaMemcpy(
+        dClassBuff,
+        classIndexBuff,
+        numInstances * sizeof( unsigned short ),
+        cudaMemcpyHostToDevice ) );
 
+    // cublasHandle_t cublasHandle;
+    // cublasErrorCheck( cublasCreate( &cublasHandle ) );
+
+    time_t start, end;
+    double dif;
+    time( &start );
+    
     printf( "\nStart gradient descent...\n" );
 
     // Gradient descent
     do
     {
-        Activate<<< actGridDim, actBlockDim >>>(
+        Activate<<< actGridDim, actBlockDim, numFeatures * sizeof( double )  >>>(
             dDiffArr,
             dWeightArr,
             dFeatureBuff,
             dClassBuff,
             numInstances,
-            numFeatures );
+            numFeatures );//cublasHandle
+        cudaErrorCheck( cudaGetLastError() );
         cudaErrorCheck( cudaDeviceSynchronize() );
 
         // SumCost<<< 1, sumCostBlockDim >>>();
         // cudaDeviceSynchronize();
         // cudaMemcpy(costSumNew);
 
-        UpdateWeight<<< uwGridDim, uwBlockDim, numInstances * sizeof( double ) >>>(
+        UpdateWeight<<< uwGridDim, uwBlockDim, uwBlockDim.x * sizeof( double ) >>>(
             dDiffArr,
             dWeightArr,
             dFeatureBuff,
             alpha,
+            uwChunkSize,
             numInstances,
             numFeatures );
+        cudaErrorCheck( cudaGetLastError() );
+        cudaErrorCheck( cudaDeviceSynchronize() );
 
         // memset( batchArr, 0, numFeatures * sizeof( double ) );
 
@@ -327,14 +355,21 @@ int main()
     // while (iter == 1 || (deltaCostSum > 1.0 && iter < maxIter));
     while (iter == 1 || iter < maxIter);
 
-    // cudaMemcpy(weight);
+    time( &end );
+    dif = difftime( end, start );
 
+    printf( "Time taken is %.2lf seconds.\n", dif );
+    
+    // cudaMemcpy(weight);
+    // cublasErrorCheck( cublasDestroy( cublasHandle ) );
     cudaDeviceSynchronize();
 
     cudaFree( dFeatureBuff );
     cudaFree( dClassBuff );
     cudaFree( dWeightArr );
     cudaFree( dDiffArr );
+
+    free( node.weights );
 
     return 0;
 }

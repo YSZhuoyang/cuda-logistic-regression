@@ -27,8 +27,8 @@ public:
     ~ArffImporter();
 
     void Read( const char* fileName );
-    vector<char*> GetClassAttr();
-    vector<NumericAttr> GetFeatures();
+    std::vector<char*> GetClassAttr();
+    std::vector<NumericAttr> GetFeatures();
     double* GetInstances();
     unsigned short* GetClassIndex();
     unsigned int GetNumInstances();
@@ -37,9 +37,9 @@ public:
 private:
     void BuildInstanceTable();
 
-    vector<char*> classVec;
-    vector<NumericAttr> featureVec;
-    vector<Instance> instanceVec;
+    std::vector<char*> classVec;
+    std::vector<NumericAttr> featureVec;
+    std::vector<Instance> instanceVec;
 
     // Instance* instanceTable        = nullptr;
     double* instanceBuff           = nullptr;

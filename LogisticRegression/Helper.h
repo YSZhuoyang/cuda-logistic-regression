@@ -6,9 +6,9 @@
 #include <math.h>
 #include <algorithm>
 #include <vector>
+#include <time.h>
 
 
-using namespace std;
 using namespace BasicDataStructures;
 
 namespace MyHelper
@@ -23,7 +23,7 @@ namespace MyHelper
     bool IsLetter( const char c );
     Instance Tokenize(
         const char* str, 
-        const vector<NumericAttr>& featureVec );
+        const std::vector<NumericAttr>& featureVec );
 
     unsigned int getIndexOfMax(
         const unsigned int* uintArray, 

@@ -3,8 +3,6 @@
 #define _BASIC_DATA_STRUCTURES_H_
 
 
-using namespace std;
-
 namespace BasicDataStructures
 {
     struct Instance

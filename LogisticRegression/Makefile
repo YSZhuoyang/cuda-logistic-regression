@@ -5,14 +5,14 @@
 SHELL = /bin/sh
 CC = g++
 # Enable debug options
-CFLAGS = -g -Wall -std=c++11
+# CFLAGS = -g -Wall -std=c++11
 # Enable best optimization options
-# CFLAGS = -Ofast -march=native -mtune=native -std=c++11
+CFLAGS = -Ofast -march=native -mtune=native -std=c++11
 OBJECTS = Helper.o ArffImporter.o
 
 # Enable Nvidia gpu
 NVCC = nvcc
-NVCCCFLAGS = -arch=sm_50 -std=c++11
+NVCCCFLAGS = -arch=sm_50 -std=c++11 -use_fast_math # -lcublas -lcublas_device -rdc=true -lcudadevrt
 
 ################################ Compile ################################
 
