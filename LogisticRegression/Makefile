@@ -16,8 +16,8 @@ NVCCCFLAGS = -arch=sm_50 -std=c++11 -use_fast_math # -lcublas -lcublas_device -r
 
 ################################ Compile ################################
 
-gpu_exec: ${OBJECTS} LogisticRegression.cu
-	$(NVCC) ${NVCCCFLAGS} -o $@ ${OBJECTS} LogisticRegression.cu
+gpu_exec: ${OBJECTS} LogisticRegression_v2.cu
+	$(NVCC) ${NVCCCFLAGS} -o $@ ${OBJECTS} LogisticRegression_v2.cu
 
 Helper.o: Helper.c Helper.h BasicDataStructures.h
 	$(CC) ${CFLAGS} -c Helper.c
