@@ -187,20 +187,14 @@ int main()
     // Determine block and grid size
     dim3 actBlockDim;
     dim3 actGridDim;
-    dim3 sumCostBlockDim;
     dim3 uwBlockDim;
     dim3 uwGridDim;
     if (numInstances < 1024)
-    {
         actGridDim.x = numInstances;
-        sumCostBlockDim.x = numInstances;
-    }
     else
     {
         actGridDim.x = 1024;
         actGridDim.y = (numInstances + actGridDim.x - 1) / actGridDim.x;
-        sumCostBlockDim.x = 1024;
-        sumCostBlockDim.y = (numInstances + sumCostBlockDim.x - 1) / sumCostBlockDim.x;
     }
 
     if (numFeatures < 1024) actBlockDim.x = numFeatures;
@@ -275,7 +269,6 @@ int main()
 
         iter++;
     }
-    // while (iter == 1 || (deltaCostSum > 1.0 && iter < maxIter));
     while (iter == 1 || iter < maxIter);
 
     cudaErrorCheck( cudaThreadSynchronize() );

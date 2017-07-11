@@ -186,20 +186,14 @@ int main()
     // Determine block and grid size
     dim3 actBlockDim;
     dim3 actGridDim;
-    dim3 sumCostBlockDim;
     dim3 uwBlockDim;
     dim3 uwGridDim;
     if (numInstances < 1024)
-    {
         actGridDim.x = numInstances;
-        sumCostBlockDim.x = numInstances;
-    }
     else
     {
         actGridDim.x = 1024;
         actGridDim.y = (numInstances + actGridDim.x - 1) / actGridDim.x;
-        sumCostBlockDim.x = 1024;
-        sumCostBlockDim.y = (numInstances + sumCostBlockDim.x - 1) / sumCostBlockDim.x;
     }
 
     if (numFeatures < 1024) actBlockDim.x = numFeatures;
@@ -216,13 +210,11 @@ int main()
     normalize( featureVec, featureBuff, numInstances );
     Node node = initNode( numFeatures );
 
-    // double* dDiffArr;
     double* dWeightArr;
     double* dFeatureBuff;
     double* dFeaDiffProd;
     unsigned short* dClassBuff;
     cudaErrorCheck( cudaMalloc( (void**) &dWeightArr, (numFeatures + 1) * sizeof( double ) ) );
-    // cudaErrorCheck( cudaMalloc( (void**) &dDiffArr, numInstances * sizeof( double ) ) );
     cudaErrorCheck( cudaMalloc( (void**) &dFeatureBuff, numInstances * numFeatures * sizeof( double ) ) );
     cudaErrorCheck( cudaMalloc( (void**) &dFeaDiffProd, numInstances * numFeatures * sizeof( double ) ) );
     cudaErrorCheck( cudaMalloc( (void**) &dClassBuff, numInstances * sizeof( unsigned short ) ) );
@@ -264,11 +256,8 @@ int main()
             dClassBuff,
             numInstances,
             numFeatures );
-        // cudaErrorCheck( cudaGetLastError() );
+        cudaErrorCheck( cudaGetLastError() );
 
-        // MultFeaDiff<<<>>>();
-        // cudaErrorCheck( cudaGetLastError() );
-        
         UpdateWeight<<< uwGridDim, uwBlockDim, uwKerSharedMemoSize >>>(
             dWeightArr,
             dFeaDiffProd,
@@ -276,11 +265,10 @@ int main()
             uwChunkSize,
             numInstances,
             numFeatures );
-        // cudaErrorCheck( cudaGetLastError() );
+        cudaErrorCheck( cudaGetLastError() );
 
         iter++;
     }
-    // while (iter == 1 || (deltaCostSum > 1.0 && iter < maxIter));
     while (iter == 1 || iter < maxIter);
 
     cudaErrorCheck( cudaThreadSynchronize() );
@@ -297,7 +285,6 @@ int main()
     cudaFree( dFeaDiffProd );
     cudaFree( dClassBuff );
     cudaFree( dWeightArr );
-    // cudaFree( dDiffArr );
 
     free( node.weights );
 
