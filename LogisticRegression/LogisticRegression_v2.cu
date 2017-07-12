@@ -1,6 +1,9 @@
 
-// Slow!!! Too much write operations in kernels.
-
+// Slow!!!
+// 1. Too much write operations in Activate kernel caused by
+//    storing one 'diff' value per feature per instance.
+// 2. Low utilization of GPU SMs cache due to discontinuous
+//    memory reading in UpdateWeight kernel.
 
 #include "Helper.h"
 #include "ArffImporter.h"
@@ -160,12 +163,6 @@ inline void cudaErrorCheck( cudaError_t cudaRes )
             cudaGetErrorString( cudaRes ) );
 }
 
-// void cublasErrorCheck( cublasStatus_t cublasRes )
-// {
-//     if (cublasRes != CUBLAS_STATUS_SUCCESS)
-//         printf( "Cublas library failed to load.\n" );
-// }
-
 int main()
 {
     ArffImporter trainSetImporter;
@@ -180,8 +177,6 @@ int main()
     std::vector<NumericAttr> featureVec = trainSetImporter.GetFeatures();
     unsigned int numFeatures = featureVec.size();
 
-    // unsigned int numInstances = 25000;
-    // unsigned int numFeatures = 1000;
     unsigned int alpha = 50;
     unsigned int maxIter = 200;
     unsigned int iter = 0;
@@ -238,8 +233,6 @@ int main()
         numInstances * sizeof( unsigned short ),
         cudaMemcpyHostToDevice ) );
 
-    // cublasHandle_t cublasHandle;
-    // cublasErrorCheck( cublasCreate( &cublasHandle ) );
     unsigned int actKerSharedMemoSize = numFeatures * 2 * sizeof( double );
     unsigned int uwKerSharedMemoSize = uwBlockDim.x * sizeof( double );
 
@@ -275,9 +268,6 @@ int main()
     while (iter == 1 || iter < maxIter);
 
     cudaErrorCheck( cudaThreadSynchronize() );
-
-    // cudaMemcpy(weight);
-    // cublasErrorCheck( cublasDestroy( cublasHandle ) );
 
     time( &end );
     dif = difftime( end, start );
