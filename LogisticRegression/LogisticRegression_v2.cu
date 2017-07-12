@@ -1,4 +1,7 @@
 
+// Slow!!! Too much write operations in kernels.
+
+
 #include "Helper.h"
 #include "ArffImporter.h"
 

@@ -21,6 +21,7 @@ Node initNode( unsigned int numFeatures )
 void normalize(
     std::vector<NumericAttr> featureVec,
     double* featureBuff,
+    double* featureBuffTrans,
     unsigned int numInstances )
 {
     unsigned int numFeatures = featureVec.size();
@@ -36,41 +37,27 @@ void normalize(
             unsigned int featureIndex = j * numFeatures + i;
             featureBuff[featureIndex] =
                 (featureBuff[featureIndex] - featureVec[i].mean) / range;
+            featureBuffTrans[i * numInstances + j] = featureBuff[featureIndex];
         }
     }
 }
 
-__device__ double activate(
-    Node* node,
-    double* inputArr )
-{
-    double linearRes = node->weights[node->numFeatures];
-    node->inputs = inputArr;
-
-    unsigned int numFeatures = node->numFeatures;
-    for (unsigned int i = 0; i < numFeatures; i++)
-        linearRes += node->weights[i] * node->inputs[i];
-
-    node->output = 1.0 / (1.0 + exp(-linearRes));
-
-    return node->output;
-}
-
 __device__ __forceinline__ void parallelSum(
-    double* dProductArr,
+    double* sharedData,
     const unsigned int elementId,
     const unsigned int length )
 {
-    for (unsigned int i = length; i > 1; i /= 2)
+    for (unsigned int i = length; i > 1; i >>= 1)
     {
-        if (elementId < i / 2)
+        unsigned int shift = i / 2;
+        if (elementId < shift)
         {
-            dProductArr[elementId] +=
-                dProductArr[elementId + i / 2];
+            sharedData[elementId] +=
+                sharedData[elementId + shift];
 
             // Odd
-            if (i & 1 && elementId == i / 2 - 1)
-                dProductArr[elementId] += dProductArr[i - 1];
+            if (i & 1 && elementId == shift - 1)
+                sharedData[elementId] += sharedData[i - 1];
         }
         __syncthreads();
     }
@@ -90,9 +77,10 @@ __global__ void Activate(
     // if (featureId == 0) printf( "Instance ID: %u\n", instanceId );
 
     double hRes = dWeightArr[numFeatures];
+    const double* dFeaOffset = dFeatureBuff + instanceId * numFeatures;
     extern __shared__ double dProductShared[];
     dProductShared[featureId] =
-        dWeightArr[featureId] * dFeatureBuff[instanceId * numFeatures + featureId];
+        dWeightArr[featureId] * dFeaOffset[featureId];
     __syncthreads();
 
     // Assume numFeatures is big
@@ -109,7 +97,7 @@ __global__ void Activate(
 __global__ void UpdateWeight(
     double* dDiffArr,
     double* dWeightArr,
-    const double* dFeatureBuff,
+    const double* dFeatureBuffTrans,
     const unsigned int alpha,
     const unsigned int chunkSize,
     const unsigned int numInstances,
@@ -130,13 +118,11 @@ __global__ void UpdateWeight(
     double multSum = 0.0;
     // Values of one feature
     extern __shared__ double dProductShared[];
-    dProductShared[instChunkId] = 0.0;
     for (unsigned int i = chunkSize * instChunkId; i < stopId; i++)
-        multSum += dFeatureBuff[i * numFeatures + featureId] * dDiffArr[i];
+        multSum += dFeatureBuffTrans[featureId * numInstances + i] * dDiffArr[i];
     dProductShared[instChunkId] = multSum;
     __syncthreads();
 
-    // Parallel sum
     // Assume numInstances is big
     parallelSum( dProductShared, instChunkId, blockDim.x );
 
@@ -175,7 +161,8 @@ int main()
     // testSetImporter.Read( "Dataset/test/dev-first1000.arff" );
 
     unsigned int numInstances = trainSetImporter.GetNumInstances();
-    double* featureBuff = trainSetImporter.GetInstances();
+    double* featureBuff = trainSetImporter.GetFeatureBuff();
+    double* featureBuffTrans = trainSetImporter.GetFeatureBuffTrans();
     unsigned short* classIndexBuff = trainSetImporter.GetClassIndex();
     std::vector<NumericAttr> featureVec = trainSetImporter.GetFeatures();
     unsigned int numFeatures = featureVec.size();
@@ -184,11 +171,13 @@ int main()
     unsigned int maxIter = 200;
     unsigned int iter = 0;
 
-    // Determine block and grid size
+    // Determine block and grid size of Activat kernel
     dim3 actBlockDim;
     dim3 actGridDim;
     dim3 uwBlockDim;
     dim3 uwGridDim;
+    // Assume numFeatures <= 1024 (max number of threads per block)
+    actBlockDim.x = numFeatures;
     if (numInstances < 1024)
         actGridDim.x = numInstances;
     else
@@ -197,32 +186,33 @@ int main()
         actGridDim.y = (numInstances + actGridDim.x - 1) / actGridDim.x;
     }
 
-    if (numFeatures < 1024) actBlockDim.x = numFeatures;
-    else
-    {
-        actBlockDim.x = 1024;
-        actBlockDim.y = (numFeatures + actBlockDim.x - 1) / actBlockDim.x;
-    }
-
-    uwBlockDim.x = 1000;
+    // Determine block and grid size of UpdateWeight kernel
+    uwBlockDim.x = actGridDim.x;
     uwGridDim = actBlockDim;
     unsigned int uwChunkSize = numInstances / uwBlockDim.x;
 
-    normalize( featureVec, featureBuff, numInstances );
+    normalize( featureVec, featureBuff, featureBuffTrans, numInstances );
     Node node = initNode( numFeatures );
 
     double* dDiffArr;
     double* dWeightArr;
     double* dFeatureBuff;
+    double* dFeatureBuffTrans;
     unsigned short* dClassBuff;
     cudaErrorCheck( cudaMalloc( (void**) &dWeightArr, (numFeatures + 1) * sizeof( double ) ) );
     cudaErrorCheck( cudaMalloc( (void**) &dDiffArr, numInstances * sizeof( double ) ) );
     cudaErrorCheck( cudaMalloc( (void**) &dFeatureBuff, numInstances * numFeatures * sizeof( double ) ) );
+    cudaErrorCheck( cudaMalloc( (void**) &dFeatureBuffTrans, numInstances * numFeatures * sizeof( double ) ) );
     cudaErrorCheck( cudaMalloc( (void**) &dClassBuff, numInstances * sizeof( unsigned short ) ) );
 
     cudaErrorCheck( cudaMemcpy(
         dFeatureBuff,
         featureBuff,
+        numInstances * numFeatures * sizeof( double ),
+        cudaMemcpyHostToDevice ) );
+    cudaErrorCheck( cudaMemcpy(
+        dFeatureBuffTrans,
+        featureBuffTrans,
         numInstances * numFeatures * sizeof( double ),
         cudaMemcpyHostToDevice ) );
     cudaErrorCheck( cudaMemcpy(
@@ -260,7 +250,7 @@ int main()
         UpdateWeight<<< uwGridDim, uwBlockDim, uwBlockDim.x * sizeof( double ) >>>(
             dDiffArr,
             dWeightArr,
-            dFeatureBuff,
+            dFeatureBuffTrans,
             alpha,
             uwChunkSize,
             numInstances,
@@ -278,10 +268,10 @@ int main()
 
     time( &end );
     dif = difftime( end, start );
-
     printf( "Time taken is %.2lf seconds.\n", dif );
 
     cudaFree( dFeatureBuff );
+    cudaFree( dFeatureBuffTrans );
     cudaFree( dClassBuff );
     cudaFree( dWeightArr );
     cudaFree( dDiffArr );

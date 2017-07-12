@@ -11,7 +11,8 @@ ArffImporter::ArffImporter()
 
 ArffImporter::~ArffImporter()
 {
-    free( instanceBuff );
+    free( featureBuff );
+    free( featureBuffTrans );
     // free( instanceTable );
     free( classIndexBuff );
 
@@ -24,21 +25,42 @@ ArffImporter::~ArffImporter()
 
 void ArffImporter::BuildInstanceTable()
 {
-    if (instanceBuff != nullptr)
+    if (featureBuff != nullptr || featureBuffTrans != nullptr)
         return;
     
-    instanceBuff =
+    featureBuff =
+        (double*) malloc( numInstances * numFeatures * sizeof( double ) );
+    featureBuffTrans =
         (double*) malloc( numInstances * numFeatures * sizeof( double ) );
     // instanceTable = (Instance*) malloc( numInstances * sizeof( Instance ) );
     classIndexBuff =
         (unsigned short*) malloc( numInstances * sizeof( unsigned short ) );
+    // for (unsigned int i = 0; i < numInstances; i++)
+    // {
+    //     double* offset = featureBuff + i * numFeatures;
+    //     memmove(
+    //         offset,
+    //         instanceVec[i].featureAttrArray,
+    //         numFeatures * sizeof( double ) );
+    //     classIndexBuff[i] = instanceVec[i].classIndex;
+    //     free( instanceVec[i].featureAttrArray );
+    // }
+
+    // // Build transpose matrix
+    // for (unsigned int r = 0; r < numInstances; r++)
+    //     for (unsigned int c = 0; c < numFeatures; c++)
+    //         featureBuffTrans[c * numInstances + r] = featureBuff[r * numFeatures + c];
+
     for (unsigned int i = 0; i < numInstances; i++)
     {
-        double* offset = instanceBuff + i * numFeatures;
-        memmove(
-            offset,
-            instanceVec[i].featureAttrArray,
-            numFeatures * sizeof( double ) );
+        for (unsigned int j = 0; j < numFeatures; j++)
+        {
+            featureBuff[i * numFeatures + j] =
+                instanceVec[i].featureAttrArray[j];
+            featureBuffTrans[j * numInstances + i] =
+                instanceVec[i].featureAttrArray[j];
+        }
+
         classIndexBuff[i] = instanceVec[i].classIndex;
         free( instanceVec[i].featureAttrArray );
     }
@@ -201,9 +223,14 @@ std::vector<NumericAttr> ArffImporter::GetFeatures()
     return featureVec;
 }
 
-double* ArffImporter::GetInstances()
+double* ArffImporter::GetFeatureBuff()
 {
-    return instanceBuff;
+    return featureBuff;
+}
+
+double* ArffImporter::GetFeatureBuffTrans()
+{
+    return featureBuffTrans;
 }
 
 unsigned short* ArffImporter::GetClassIndex()
