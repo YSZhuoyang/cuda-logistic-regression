@@ -8,6 +8,8 @@
 // #include "cublas_v2.h"
 
 
+#define WARP_SIZE 32
+
 Node initNode( unsigned int numFeatures )
 {
     Node node;
@@ -42,6 +44,51 @@ void normalize(
     }
 }
 
+__device__ __forceinline__ double shuffleReduceSum( double regValue )
+{
+    for (unsigned int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
+        regValue += __shfl_down( regValue, offset );
+    // for (unsigned int i = 1; i < WARP_SIZE; i *= 2) // i =<< 1
+    //     regValue += __shfl_xor( regValue, i );
+    return regValue;
+}
+
+// Sum up any arrays with a maximum length of 1024
+// elementId is equal to the threadId
+__device__ __forceinline__ double shuffleParallelSum(
+    double regValue,
+    const unsigned int numWarps,
+    const unsigned int elementId )
+{
+    __shared__ double shared[32];
+    // extern __shared__ double shared[];
+
+    int warpThreadId = elementId % WARP_SIZE;
+    int warpId = elementId / WARP_SIZE;
+
+    // Performing warp reduction. Only the threads with 0 index
+    // within the warp have the "val" value set with the warp reduction result
+    regValue = shuffleReduceSum( regValue );     
+
+    // Only the threads with 0 index within the warp write the warp result to shared memory
+    if (warpThreadId == 0) shared[warpId] = regValue;
+
+    // Wait for all warp reductions
+    __syncthreads();
+
+    // There will be at most 1024 threads within a block and at most 1024 blocks within a grid.
+    // The partial sum is read from shared memory only the corresponding
+    // warp existed, otherwise the partial sum is set to zero.
+    regValue = (elementId < numWarps) ? shared[warpThreadId] : 0;
+
+    // The first warp performs the final partial warp summation.
+    // Note that numWarps is always smaller than 32 given an array with a maximum length of 1024.
+    if (warpId == 0) regValue = shuffleReduceSum( regValue ); 
+
+    return regValue;
+}
+
+// Parallel sum using a shared memory
 __device__ __forceinline__ void parallelSum(
     double* sharedData,
     const unsigned int elementId,
@@ -68,6 +115,7 @@ __global__ void Activate(
     double* dWeightArr,
     const double* dFeatureBuff,
     const unsigned short* dClassBuff,
+    const unsigned int numWarps,
     const unsigned int numInstances,
     const unsigned int numFeatures )
 {
@@ -78,17 +126,21 @@ __global__ void Activate(
 
     double hRes = dWeightArr[numFeatures];
     const double* dFeaOffset = dFeatureBuff + instanceId * numFeatures;
-    extern __shared__ double dProductShared[];
-    dProductShared[featureId] =
-        dWeightArr[featureId] * dFeaOffset[featureId];
-    __syncthreads();
+    // extern __shared__ double dProductShared[];
+    // dProductShared[featureId] =
+    //     dWeightArr[featureId] * dFeaOffset[featureId];
+    // __syncthreads();
 
     // Assume numFeatures is big
-    parallelSum( dProductShared, featureId, numFeatures );
+    // parallelSum( dProductShared, featureId, numFeatures );
+    hRes += shuffleParallelSum(
+        dWeightArr[featureId] * dFeaOffset[featureId],
+        numWarps,
+        featureId );
 
     if (featureId == 0)
     {
-        hRes += dProductShared[0];
+        // hRes += dProductShared[0];
         hRes = 1.0 / (1.0 + exp(-hRes));
         dDiffArr[instanceId] = hRes - (double) dClassBuff[instanceId];
     }
@@ -100,6 +152,7 @@ __global__ void UpdateWeight(
     const double* dFeatureBuffTrans,
     const unsigned int alpha,
     const unsigned int chunkSize,
+    const unsigned int numWarps,
     const unsigned int numInstances,
     const unsigned int numFeatures )
 {
@@ -109,28 +162,35 @@ __global__ void UpdateWeight(
     if (instChunkId >= numInstances || featureId >= numFeatures) return;
 
     unsigned int stopId;
-    // Last chunk
-    if (instChunkId == blockDim.x - 1)
+    if (instChunkId == blockDim.x - 1) // Last chunk
         stopId = numInstances;
     else
         stopId = chunkSize * (instChunkId + 1);
 
     double multSum = 0.0;
     // Values of one feature
-    extern __shared__ double dProductShared[];
+    // extern __shared__ double dProductShared[];
+    // for (unsigned int i = chunkSize * instChunkId; i < stopId; i++)
+    //     multSum += dFeatureBuffTrans[featureId * numInstances + i] * dDiffArr[i];
+    // dProductShared[instChunkId] = multSum;
+    // __syncthreads();
+
     for (unsigned int i = chunkSize * instChunkId; i < stopId; i++)
         multSum += dFeatureBuffTrans[featureId * numInstances + i] * dDiffArr[i];
-    dProductShared[instChunkId] = multSum;
-    __syncthreads();
+    multSum = shuffleParallelSum(
+        multSum,
+        numWarps,
+        instChunkId );
 
     // Assume numInstances is big
-    parallelSum( dProductShared, instChunkId, blockDim.x );
+    // parallelSum( dProductShared, instChunkId, blockDim.x );
 
     // Update weights
     if (instChunkId == 0)
     {
         dWeightArr[featureId] -=
-            alpha / (double) numInstances * dProductShared[0];
+            // alpha / (double) numInstances * dProductShared[0];
+            alpha / (double) numInstances * multSum;
 
         if (featureId == 0)
             printf( "Updating weights completed, weight: %f\n", dWeightArr[0] );
@@ -171,26 +231,6 @@ int main()
     unsigned int maxIter = 200;
     unsigned int iter = 0;
 
-    // Determine block and grid size of Activat kernel
-    dim3 actBlockDim;
-    dim3 actGridDim;
-    dim3 uwBlockDim;
-    dim3 uwGridDim;
-    // Assume numFeatures <= 1024 (max number of threads per block)
-    actBlockDim.x = numFeatures;
-    if (numInstances < 1024)
-        actGridDim.x = numInstances;
-    else
-    {
-        actGridDim.x = 1024;
-        actGridDim.y = (numInstances + actGridDim.x - 1) / actGridDim.x;
-    }
-
-    // Determine block and grid size of UpdateWeight kernel
-    uwBlockDim.x = actGridDim.x;
-    uwGridDim = actBlockDim;
-    unsigned int uwChunkSize = numInstances / uwBlockDim.x;
-
     normalize( featureVec, featureBuff, featureBuffTrans, numInstances );
     Node node = initNode( numFeatures );
 
@@ -229,6 +269,30 @@ int main()
     // cublasHandle_t cublasHandle;
     // cublasErrorCheck( cublasCreate( &cublasHandle ) );
 
+    // Determine block and grid size of Activat kernel
+    dim3 actBlockDim;
+    dim3 actGridDim;
+    dim3 uwBlockDim;
+    dim3 uwGridDim;
+    // Assume numFeatures <= 1024 (max number of threads per block)
+    actBlockDim.x = numFeatures;
+    if (numInstances < 1024)
+        actGridDim.x = numInstances;
+    else
+    {
+        actGridDim.x = 1024;
+        actGridDim.y = (numInstances + actGridDim.x - 1) / actGridDim.x;
+    }
+
+    // Determine block and grid size of UpdateWeight kernel
+    uwBlockDim.x = actGridDim.x;
+    uwGridDim.x = actBlockDim.x;
+    unsigned int uwChunkSize = numInstances / uwBlockDim.x;
+
+    // Compute number of warps for shuffle reduction sum
+    unsigned int numWarps = (actBlockDim.x % WARP_SIZE > 0) ?
+        actBlockDim.x / WARP_SIZE + 1 : actBlockDim.x / WARP_SIZE;
+
     time_t start, end;
     double dif;
     time( &start );
@@ -238,21 +302,23 @@ int main()
     // Gradient descent
     do
     {
-        Activate<<< actGridDim, actBlockDim, numFeatures * sizeof( double ) >>>(
+        Activate<<< actGridDim, actBlockDim >>>(
             dDiffArr,
             dWeightArr,
             dFeatureBuff,
             dClassBuff,
+            numWarps,
             numInstances,
             numFeatures );
         cudaErrorCheck( cudaGetLastError() );
 
-        UpdateWeight<<< uwGridDim, uwBlockDim, uwBlockDim.x * sizeof( double ) >>>(
+        UpdateWeight<<< uwGridDim, uwBlockDim >>>(
             dDiffArr,
             dWeightArr,
             dFeatureBuffTrans,
             alpha,
             uwChunkSize,
+            numWarps,
             numInstances,
             numFeatures );
         cudaErrorCheck( cudaGetLastError() );

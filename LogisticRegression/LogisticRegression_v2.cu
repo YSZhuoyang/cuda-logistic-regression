@@ -271,7 +271,6 @@ int main()
 
     time( &end );
     dif = difftime( end, start );
-
     printf( "Time taken is %.2lf seconds.\n", dif );
 
     cudaFree( dFeatureBuff );
