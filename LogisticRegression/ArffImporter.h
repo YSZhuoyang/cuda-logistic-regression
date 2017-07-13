@@ -29,8 +29,8 @@ public:
     void Read( const char* fileName );
     std::vector<char*> GetClassAttr();
     std::vector<NumericAttr> GetFeatures();
-    double* GetFeatureBuff();
-    double* GetFeatureBuffTrans();
+    float* GetFeatureBuff();
+    float* GetFeatureBuffTrans();
     unsigned short* GetClassIndex();
     unsigned int GetNumInstances();
 
@@ -43,8 +43,8 @@ private:
     std::vector<Instance> instanceVec;
 
     // Instance* instanceTable        = nullptr;
-    double* featureBuff            = nullptr;
-    double* featureBuffTrans       = nullptr;
+    float* featureBuff            = nullptr;
+    float* featureBuffTrans       = nullptr;
     unsigned short* classIndexBuff = nullptr;
 
     unsigned int numFeatures       = 0;

@@ -31,7 +31,7 @@ namespace MyHelper
     // Consume a sorted array, remove duplicates in place, 
     // and return the number of unique elements.
     unsigned int removeDuplicates(
-        double* sortedArr,
+        float* sortedArr,
         unsigned int length );
 }
 

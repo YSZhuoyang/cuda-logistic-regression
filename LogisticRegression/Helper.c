@@ -16,7 +16,7 @@ Instance MyHelper::Tokenize(
     unsigned int numFeatures = featureVec.size();
     Instance instance;
     instance.featureAttrArray = 
-        (double*) calloc( numFeatures, sizeof( double ) );
+        (float*) calloc( numFeatures, sizeof( float ) );
 
     unsigned int iter = 0;
 
@@ -99,7 +99,7 @@ unsigned int MyHelper::getIndexOfMax(
 }
 
 unsigned int MyHelper::removeDuplicates(
-    double* sortedArr, 
+    float* sortedArr, 
     unsigned int length )
 {
     if (sortedArr == nullptr) return 0;

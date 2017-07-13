@@ -29,19 +29,19 @@ void ArffImporter::BuildInstanceTable()
         return;
     
     featureBuff =
-        (double*) malloc( numInstances * numFeatures * sizeof( double ) );
+        (float*) malloc( numInstances * numFeatures * sizeof( float ) );
     featureBuffTrans =
-        (double*) malloc( numInstances * numFeatures * sizeof( double ) );
+        (float*) malloc( numInstances * numFeatures * sizeof( float ) );
     // instanceTable = (Instance*) malloc( numInstances * sizeof( Instance ) );
     classIndexBuff =
         (unsigned short*) malloc( numInstances * sizeof( unsigned short ) );
     // for (unsigned int i = 0; i < numInstances; i++)
     // {
-    //     double* offset = featureBuff + i * numFeatures;
+    //     float* offset = featureBuff + i * numFeatures;
     //     memmove(
     //         offset,
     //         instanceVec[i].featureAttrArray,
-    //         numFeatures * sizeof( double ) );
+    //         numFeatures * sizeof( float ) );
     //     classIndexBuff[i] = instanceVec[i].classIndex;
     //     free( instanceVec[i].featureAttrArray );
     // }
@@ -79,7 +79,7 @@ void ArffImporter::Read( const char* fileName )
 		return;
 	}
 
-    // Assuming all data types of all features are double
+    // Assuming all data types of all features are float
     // and ignoring feature types
     char firstToken[TOKEN_LENGTH_MAX];
     char buffer[READ_LINE_MAX];
@@ -139,22 +139,22 @@ void ArffImporter::Read( const char* fileName )
             numClasses = classVec.size();
             
             unsigned int featureAttrArraySize =
-                numFeatures * sizeof( double );
+                numFeatures * sizeof( float );
 
-            double* featureValueSumArr = (double*) calloc( numFeatures, 
-                sizeof( double ) );
+            float* featureValueSumArr = (float*) calloc( numFeatures, 
+                sizeof( float ) );
 
             while (fgets( buffer, READ_LINE_MAX, fp ) != nullptr)
             {
                 unsigned int index = 0;
                 unsigned int featureIndex = 0;
-                double value;
+                float value;
                 
                 Instance instance;
-                instance.featureAttrArray = (double*) malloc( featureAttrArraySize );
+                instance.featureAttrArray = (float*) malloc( featureAttrArraySize );
 
                 // Get feature attribute value
-                while (sscanf( buffer + index, "%lf%n", &value, &readSize ) > 0)
+                while (sscanf( buffer + index, "%f%n", &value, &readSize ) > 0)
                 {
                     if (featureVec[featureIndex].min > value)
                         featureVec[featureIndex].min = value;
@@ -223,12 +223,12 @@ std::vector<NumericAttr> ArffImporter::GetFeatures()
     return featureVec;
 }
 
-double* ArffImporter::GetFeatureBuff()
+float* ArffImporter::GetFeatureBuff()
 {
     return featureBuff;
 }
 
-double* ArffImporter::GetFeatureBuffTrans()
+float* ArffImporter::GetFeatureBuffTrans()
 {
     return featureBuffTrans;
 }

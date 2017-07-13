@@ -7,26 +7,26 @@ namespace BasicDataStructures
 {
     struct Instance
     {
-        double* featureAttrArray;
+        float* featureAttrArray;
         unsigned short classIndex;
     };
 
     struct NumericAttr
     {
         char* name;
-        double min;
-        double max;
-        double mean;
+        float min;
+        float max;
+        float mean;
     };
 
     struct Node
     {
-        double* inputs;
+        float* inputs;
         // Weight array has numFeatures + 1 elements.
         // The last element is bias parameter.
-        double* weights;
-        double output;
-        double error;
+        float* weights;
+        float output;
+        float error;
         unsigned int numFeatures;
     };
 }
