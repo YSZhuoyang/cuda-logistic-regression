@@ -137,8 +137,8 @@ __global__ void Activate(
 }
 
 __global__ void UpdateWeight(
-    float* dDiffArr,
     float* dWeightArr,
+    const float* dDiffArr,
     const float* dFeatureBuffTrans,
     const unsigned int alpha,
     const unsigned int chunkSize,
@@ -200,10 +200,6 @@ int main()
     std::vector<NumericAttr> featureVec = trainSetImporter.GetFeatures();
     unsigned int numFeatures = featureVec.size();
 
-    unsigned int alpha = 50;
-    unsigned int maxIter = 200;
-    unsigned int iter = 0;
-
     normalize( featureVec, featureBuff, featureBuffTrans, numInstances );
     Node node = initNode( numFeatures );
 
@@ -217,22 +213,22 @@ int main()
     cudaErrorCheck( cudaMalloc( (void**) &dFeatureBuff, numInstances * numFeatures * sizeof( float ) ) );
     cudaErrorCheck( cudaMalloc( (void**) &dFeatureBuffTrans, numInstances * numFeatures * sizeof( float ) ) );
     cudaErrorCheck( cudaMalloc( (void**) &dClassBuff, numInstances * sizeof( unsigned short ) ) );
-    cudaErrorCheck( cudaMemcpy(
+    cudaErrorCheck( cudaMemcpyAsync(
         dFeatureBuff,
         featureBuff,
         numInstances * numFeatures * sizeof( float ),
         cudaMemcpyHostToDevice ) );
-    cudaErrorCheck( cudaMemcpy(
+    cudaErrorCheck( cudaMemcpyAsync(
         dFeatureBuffTrans,
         featureBuffTrans,
         numInstances * numFeatures * sizeof( float ),
         cudaMemcpyHostToDevice ) );
-    cudaErrorCheck( cudaMemcpy(
+    cudaErrorCheck( cudaMemcpyAsync(
         dWeightArr,
         node.weights,
         (numFeatures + 1) * sizeof( float ),
         cudaMemcpyHostToDevice ) );
-    cudaErrorCheck( cudaMemcpy(
+    cudaErrorCheck( cudaMemcpyAsync(
         dClassBuff,
         classIndexBuff,
         numInstances * sizeof( unsigned short ),
@@ -258,9 +254,9 @@ int main()
     dim3 uwGridDim;
     unsigned int uwChunkSize;
     unsigned int uwNumChunks;
-    if (numInstances > 1024)
+    if (numInstances > 512)
     {
-        uwNumChunks = 1024;
+        uwNumChunks = 512;
         uwChunkSize = numInstances / uwNumChunks;
     }
     else
@@ -272,6 +268,10 @@ int main()
     uwGridDim.x = numFeatures;
     // Compute number of warps for shuffle reduction sum
     unsigned int uwNumWarps = (uwNumChunks + WARP_SIZE - 1) / WARP_SIZE;
+
+    unsigned int alpha = 50;
+    unsigned int maxIter = 200;
+    unsigned int iter = 0;
 
     time_t start, end;
     float dif;
@@ -293,8 +293,8 @@ int main()
         cudaErrorCheck( cudaGetLastError() );
 
         UpdateWeight<<< uwGridDim, uwBlockDim >>>(
-            dDiffArr,
             dWeightArr,
+            dDiffArr,
             dFeatureBuffTrans,
             alpha,
             uwChunkSize,
