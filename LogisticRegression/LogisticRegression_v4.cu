@@ -53,19 +53,17 @@ __device__ __forceinline__ float shuffleReduceSum( float regValue )
 }
 
 // Sum up any arrays with a maximum length of 1024
-// elementId is equal to the threadId
 __device__ __forceinline__ float shuffleParallelSum(
     float regValue,
-    const unsigned int numWarps,
-    const unsigned int elementId )
+    const unsigned int numWarps )
 {
     __shared__ float shared[32];
-    int warpThreadId = elementId % WARP_SIZE;
-    int warpId = elementId / WARP_SIZE;
+    int warpThreadId = threadIdx.x % WARP_SIZE;
+    int warpId = threadIdx.x / WARP_SIZE;
 
     // Performing warp reduction. Only the threads with 0 index
     // within the warp have the "val" value set with the warp reduction result
-    regValue = shuffleReduceSum( regValue );     
+    regValue = shuffleReduceSum( regValue );
 
     // Only the threads with 0 index within the warp write the warp result to shared memory
     if (warpThreadId == 0) shared[warpId] = regValue;
@@ -73,63 +71,63 @@ __device__ __forceinline__ float shuffleParallelSum(
     // Wait for all warp reductions
     __syncthreads();
 
-    // There will be at most 1024 threads within a block and at most 1024 blocks within a grid.
+    // There will be at most 1024 threads within a block.
     // The partial sum is read from shared memory only the corresponding
     // warp existed, otherwise the partial sum is set to zero.
-    regValue = (elementId < numWarps) ? shared[warpThreadId] : 0;
+    if (threadIdx.x < numWarps)
+    {
+        regValue = shared[warpThreadId];
+        // The first warp performs the final partial warp summation.
+        // Note that numWarps is always smaller than 32 given an array with a maximum length of 1024.
+        if (warpId == 0) return shuffleReduceSum( regValue );
+    }
 
-    // The first warp performs the final partial warp summation.
-    // Note that numWarps is always smaller than 32 given an array with a maximum length of 1024.
-    if (warpId == 0) regValue = shuffleReduceSum( regValue ); 
-
-    return regValue;
+    return 0;
 }
 
 // Parallel sum using a shared memory
 __device__ __forceinline__ void parallelSum(
-    float* sharedData,
-    const unsigned int elementId,
+    float* __restrict__ sharedData,
     const unsigned int length )
 {
     for (unsigned int i = length; i > 1; i >>= 1)
     {
         unsigned int shift = i / 2;
-        if (elementId < shift)
+        if (threadIdx.x < shift)
         {
-            sharedData[elementId] +=
-                sharedData[elementId + shift];
+            sharedData[threadIdx.x] +=
+                sharedData[threadIdx.x + shift];
 
             // Odd
-            if (i & 1 && elementId == shift - 1)
-                sharedData[elementId] += sharedData[i - 1];
+            if (i & 1 && threadIdx.x == shift - 1)
+                sharedData[threadIdx.x] += sharedData[i - 1];
         }
         __syncthreads();
     }
 }
 
 __global__ void Activate(
-    float* dDiffArr,
-    const float* dWeightArr,
-    const float* dFeatureBuff,
-    const unsigned short* dClassBuff,
+    float* __restrict__ dDiffArr,
+    const float* __restrict__ dWeightArr,
+    const float* __restrict__ dFeatureBuff,
+    const unsigned short* __restrict__ dClassBuff,
     const unsigned int numWarps,
     const unsigned int numInstances,
     const unsigned int numFeatures )
 {
     unsigned int instanceId = blockIdx.y * gridDim.x + blockIdx.x;
-    unsigned int featureId = threadIdx.y * blockDim.x + threadIdx.x;
-    if (instanceId >= numInstances || featureId >= numFeatures) return;
-    // if (featureId == 0) printf( "Instance ID: %u\n", instanceId );
+    // unsigned int featureId = threadIdx.y * blockDim.x + threadIdx.x;
+    if (instanceId >= numInstances || threadIdx.x >= numFeatures) return;
+    // if (threadIdx.x == 0) printf( "Instance ID: %u\n", instanceId );
 
     float hRes = dWeightArr[numFeatures];
-    const float* dFeaOffset = dFeatureBuff + instanceId * numFeatures;
+    const float* __restrict__ dFeaOffset = dFeatureBuff + instanceId * numFeatures;
 
     hRes += shuffleParallelSum(
-        dWeightArr[featureId] * dFeaOffset[featureId],
-        numWarps,
-        featureId );
+        dWeightArr[threadIdx.x] * dFeaOffset[threadIdx.x],
+        numWarps );
 
-    if (featureId == 0)
+    if (threadIdx.x == 0)
     {
         hRes = 1.0 / (1.0 + exp(-hRes));
         dDiffArr[instanceId] = hRes - (float) dClassBuff[instanceId];
@@ -137,9 +135,9 @@ __global__ void Activate(
 }
 
 __global__ void UpdateWeight(
-    float* dWeightArr,
-    const float* dDiffArr,
-    const float* dFeatureBuffTrans,
+    float* __restrict__ dWeightArr,
+    const float* __restrict__ dDiffArr,
+    const float* __restrict__ dFeatureBuffTrans,
     const unsigned int alpha,
     const unsigned int chunkSize,
     const unsigned int numWarps,
@@ -148,25 +146,24 @@ __global__ void UpdateWeight(
 {
     // One block per feature, one thread per group of instances
     unsigned int featureId = blockIdx.y * gridDim.x + blockIdx.x;
-    unsigned int instChunkId = threadIdx.y * blockDim.x + threadIdx.x;
-    if (instChunkId >= numInstances || featureId >= numFeatures) return;
+    // unsigned int instChunkId = threadIdx.y * blockDim.x + threadIdx.x;
+    if (threadIdx.x >= numInstances || featureId >= numFeatures) return;
 
     unsigned int stopId;
-    if (instChunkId == blockDim.x - 1) // Last chunk
+    if (threadIdx.x == blockDim.x - 1) // Last chunk
         stopId = numInstances;
     else
-        stopId = chunkSize * (instChunkId + 1);
+        stopId = chunkSize * (threadIdx.x + 1);
 
     float multSum = 0.0;
-    for (unsigned int i = chunkSize * instChunkId; i < stopId; i++)
+    for (unsigned int i = chunkSize * threadIdx.x; i < stopId; i++)
         multSum += dFeatureBuffTrans[featureId * numInstances + i] * dDiffArr[i];
     multSum = shuffleParallelSum(
         multSum,
-        numWarps,
-        instChunkId );
+        numWarps );
 
     // Update weights
-    if (instChunkId == 0)
+    if (threadIdx.x == 0)
     {
         dWeightArr[featureId] -=
             alpha / (float) numInstances * multSum;

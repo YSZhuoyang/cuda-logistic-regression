@@ -90,7 +90,7 @@ __device__ __forceinline__ double shuffleParallelSum(
 
 // Parallel sum using a shared memory
 __device__ __forceinline__ void parallelSum(
-    double* sharedData,
+    double* __restrict__ sharedData,
     const unsigned int elementId,
     const unsigned int length )
 {
@@ -111,10 +111,10 @@ __device__ __forceinline__ void parallelSum(
 }
 
 __global__ void Activate(
-    double* dDiffArr,
-    double* dWeightArr,
-    const double* dFeatureBuff,
-    const unsigned short* dClassBuff,
+    double* __restrict__ dDiffArr,
+    const double* __restrict__ dWeightArr,
+    const double* __restrict__ dFeatureBuff,
+    const unsigned short* __restrict__ dClassBuff,
     const unsigned int numWarps,
     const unsigned int numInstances,
     const unsigned int numFeatures )
@@ -147,9 +147,9 @@ __global__ void Activate(
 }
 
 __global__ void UpdateWeight(
-    double* dDiffArr,
-    double* dWeightArr,
-    const double* dFeatureBuffTrans,
+    double* __restrict__ dWeightArr,
+    const double* __restrict__ dDiffArr,
+    const double* __restrict__ dFeatureBuffTrans,
     const unsigned int alpha,
     const unsigned int chunkSize,
     const unsigned int numWarps,
@@ -313,8 +313,8 @@ int main()
         cudaErrorCheck( cudaGetLastError() );
 
         UpdateWeight<<< uwGridDim, uwBlockDim >>>(
-            dDiffArr,
             dWeightArr,
+            dDiffArr,
             dFeatureBuffTrans,
             alpha,
             uwChunkSize,

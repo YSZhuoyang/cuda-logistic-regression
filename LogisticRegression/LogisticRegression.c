@@ -11,15 +11,15 @@ Node initNode( unsigned int numFeatures )
 {
     Node node;
     node.numFeatures = numFeatures;
-    node.weights = (double*) malloc( (numFeatures + 1) * sizeof( double ) );
-    memset( node.weights, 1, (numFeatures + 1) * sizeof( double ) );
+    node.weights = (float*) malloc( (numFeatures + 1) * sizeof( float ) );
+    memset( node.weights, 1, (numFeatures + 1) * sizeof( float ) );
 
     return node;
 }
 
 void normalize(
     std::vector<NumericAttr> featureVec,
-    double* featureBuff,
+    float* featureBuff,
     unsigned int numInstances )
 {
     unsigned int numFeatures = featureVec.size();
@@ -27,7 +27,7 @@ void normalize(
     for (unsigned int i = 0; i < numFeatures; i++)
     {
         // Use either range / standard deviation
-        double range = featureVec[i].max - featureVec[i].min;
+        float range = featureVec[i].max - featureVec[i].min;
         if (range == 0.0) continue;
 
         for (unsigned int j = 0; j < numInstances; j++)
@@ -39,11 +39,11 @@ void normalize(
     }
 }
 
-inline double activate(
+inline float activate(
     Node* node,
-    double* inputArr )
+    float* inputArr )
 {
-    double linearRes = node->weights[node->numFeatures];
+    float linearRes = node->weights[node->numFeatures];
     node->inputs = inputArr;
 
     unsigned int numFeatures = node->numFeatures;
@@ -55,7 +55,7 @@ inline double activate(
     return node->output;
 }
 
-inline double computeCost( double hRes, unsigned short y )
+inline float computeCost( float hRes, unsigned short y )
 {
     return (y)? -log(hRes) : -log(1.0 - hRes);
     // return -y * log(hRes) - (1 - y) * (1 - log(hRes));
@@ -70,7 +70,7 @@ int main()
     // testSetImporter.Read( "Dataset/test/dev-first1000.arff" );
 
     unsigned int numInst = trainSetImporter.GetNumInstances();
-    double* featureBuff = trainSetImporter.GetInstances();
+    float* featureBuff = trainSetImporter.GetFeatureBuff();
     unsigned short* classIndexBuff = trainSetImporter.GetClassIndex();
     std::vector<NumericAttr> featureVec = trainSetImporter.GetFeatures();
     unsigned int numFeatures = featureVec.size();
@@ -80,10 +80,10 @@ int main()
     Node node = initNode( numFeatures );
     unsigned int iter = 0;
     unsigned int maxIter = 200;
-    double costSumPre = 0.0;
-    double deltaCostSum = 0.0;
-    double alpha = 50.0;
-    double* batchArr = (double*) malloc( numFeatures * sizeof( double ) );
+    float costSumPre = 0.0;
+    float deltaCostSum = 0.0;
+    float alpha = 50.0;
+    float* batchArr = (float*) malloc( numFeatures * sizeof( float ) );
 
     time_t start, end;
     double dif;
@@ -92,13 +92,13 @@ int main()
     // Gradient descent
     do
     {
-        double costSumNew = 0.0;
-        memset( batchArr, 0, numFeatures * sizeof( double ) );
+        float costSumNew = 0.0;
+        memset( batchArr, 0, numFeatures * sizeof( float ) );
 
         for (unsigned int i = 0; i < numInst; i++)
         {
-            double hRes = activate( &node, &featureBuff[i * numFeatures] );
-            double diff = hRes - (double) classIndexBuff[i];
+            float hRes = activate( &node, &featureBuff[i * numFeatures] );
+            float diff = hRes - (float) classIndexBuff[i];
             costSumNew += computeCost( hRes, classIndexBuff[i] );
             for (unsigned int j = 0; j < numFeatures; j++)
                 batchArr[j] += diff * node.inputs[j];
@@ -112,7 +112,7 @@ int main()
         // Update weights
         printf( "Weight: %f\n", node.weights[0] );
         for (unsigned int j = 0; j < numFeatures; j++)
-            node.weights[j] -= alpha / (double) numInst * batchArr[j];
+            node.weights[j] -= alpha / (float) numInst * batchArr[j];
         
         iter++;
     }
