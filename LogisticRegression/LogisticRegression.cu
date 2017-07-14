@@ -296,7 +296,7 @@ int main()
     printf( "\nStart gradient descent...\n" );
 
     // Gradient descent
-    do
+    while (iter++ < maxIter)
     {
         Dot<<< dotGridDim, dotBlockDim >>>(
             dCostArr,
@@ -324,10 +324,7 @@ int main()
             numInstances,
             numFeatures );
         cudaErrorCheck( cudaGetLastError() );
-
-        iter++;
     }
-    while (iter == 1 || iter < maxIter);
 
     cudaErrorCheck( cudaThreadSynchronize() );
     
