@@ -19,7 +19,7 @@ Node initNode( unsigned int numFeatures )
 
 void normalize(
     std::vector<NumericAttr> featureVec,
-    float* featureBuff,
+    float* featureMat,
     unsigned int numInstances )
 {
     unsigned int numFeatures = featureVec.size();
@@ -33,8 +33,8 @@ void normalize(
         for (unsigned int j = 0; j < numInstances; j++)
         {
             unsigned int featureIndex = j * numFeatures + i;
-            featureBuff[featureIndex] =
-                (featureBuff[featureIndex] - featureVec[i].mean) / range;
+            featureMat[featureIndex] =
+                (featureMat[featureIndex] - featureVec[i].mean) / range;
         }
     }
 }
@@ -70,12 +70,12 @@ int main()
     // testSetImporter.Read( "Dataset/test/dev-first1000.arff" );
 
     unsigned int numInst = trainSetImporter.GetNumInstances();
-    float* featureBuff = trainSetImporter.GetFeatureBuff();
-    unsigned short* classIndexBuff = trainSetImporter.GetClassIndex();
+    float* featureMat = trainSetImporter.GetFeatureMat();
+    unsigned short* classArr = trainSetImporter.GetClassIndex();
     std::vector<NumericAttr> featureVec = trainSetImporter.GetFeatures();
     unsigned int numFeatures = featureVec.size();
 
-    normalize( featureVec, featureBuff, numInst );
+    normalize( featureVec, featureMat, numInst );
 
     Node node = initNode( numFeatures );
     unsigned int iter = 0;
@@ -97,9 +97,9 @@ int main()
 
         for (unsigned int i = 0; i < numInst; i++)
         {
-            float hRes = activate( &node, &featureBuff[i * numFeatures] );
-            float diff = hRes - (float) classIndexBuff[i];
-            costSumNew += computeCost( hRes, classIndexBuff[i] );
+            float hRes = activate( &node, &featureMat[i * numFeatures] );
+            float diff = hRes - (float) classArr[i];
+            costSumNew += computeCost( hRes, classArr[i] );
             for (unsigned int j = 0; j < numFeatures; j++)
                 batchArr[j] += diff * node.inputs[j];
         }
