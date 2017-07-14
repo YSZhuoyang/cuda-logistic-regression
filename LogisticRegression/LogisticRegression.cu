@@ -43,67 +43,60 @@ void normalize(
     }
 }
 
-__device__ __forceinline__ float shuffleReduceSum( float regValue )
+// Parallel sum combining shuffle and shared memory
+__device__ __forceinline__ float parallelSum(
+    float* __restrict__ sharedData )
 {
-    for (unsigned int shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
-        regValue += __shfl_down( regValue, shift );
-    // for (unsigned int i = 1; i < WARP_SIZE; i *= 2) // i =<< 1
-    //     regValue += __shfl_xor( regValue, i );
-    return regValue;
-}
+    float sum = sharedData[threadIdx.x];
 
-// Sum up any arrays with a maximum length of 1024
-__device__ __forceinline__ float shuffleParallelSum(
-    float regValue,
-    const unsigned int numWarps )
-{
-    __shared__ float shared[32];
-    int warpThreadId = threadIdx.x % WARP_SIZE;
-    int warpId = threadIdx.x / WARP_SIZE;
-
-    // Performing warp reduction. Only the threads with 0 index
-    // within the warp have the "val" value set with the warp reduction result
-    regValue = shuffleReduceSum( regValue );
-
-    // Only the threads with 0 index within the warp write the warp result to shared memory
-    if (warpThreadId == 0) shared[warpId] = regValue;
-
-    // Wait for all warp reductions
+    if (threadIdx.x < 256)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 256];
     __syncthreads();
 
-    // There will be at most 1024 threads within a block.
-    // The partial sum is read from shared memory only the corresponding
-    // warp existed, otherwise the partial sum is set to zero.
-    if (threadIdx.x < numWarps)
+    if (threadIdx.x < 128)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 128];
+    __syncthreads();
+
+    if (threadIdx.x < 64)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 64];
+    __syncthreads();
+
+#if (__CUDA_ARCH__ >= 300)
+    if (threadIdx.x < 32)
     {
-        regValue = shared[warpThreadId];
-        // The first warp performs the final partial warp summation.
-        // Note that numWarps is always smaller than 32 given an array with a maximum length of 1024.
-        if (warpId == 0) return shuffleReduceSum( regValue );
+        sum += sharedData[threadIdx.x + 32];
+        // Reduce final warp using shuffle
+        for (unsigned short shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
+            sum += __shfl_down( sum, shift );
     }
+#else
+    // fully unroll reduction within a single warp
+    if (threadIdx.x < 32)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 32];
+    __syncthreads();
 
-    return 0;
-}
+    if (threadIdx.x < 16)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 16];
+    __syncthreads();
 
-// Parallel sum using a shared memory
-__device__ __forceinline__ void parallelSum(
-    float* __restrict__ sharedData,
-    const unsigned int length )
-{
-    for (unsigned int i = length; i > 1; i >>= 1)
-    {
-        unsigned int shift = i / 2;
-        if (threadIdx.x < shift)
-        {
-            sharedData[threadIdx.x] +=
-                sharedData[threadIdx.x + shift];
+    if (threadIdx.x < 8)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 8];
+    __syncthreads();
 
-            // Odd
-            if (i & 1 && threadIdx.x == shift - 1)
-                sharedData[threadIdx.x] += sharedData[i - 1];
-        }
-        __syncthreads();
-    }
+    if (threadIdx.x < 4)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 4];
+    __syncthreads();
+
+    if (threadIdx.x < 2)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 2];
+    __syncthreads();
+
+    if (threadIdx.x < 1)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 1];
+    __syncthreads();
+#endif
+
+    return sum;
 }
 
 __global__ void Dot(
@@ -111,22 +104,27 @@ __global__ void Dot(
     const float* __restrict__ dWeightArr,
     const float* __restrict__ dFeatureMat,
     const unsigned short* __restrict__ dClassArr,
-    const unsigned int numWarps,
     const unsigned int numInstances,
     const unsigned int numFeatures )
 {
     unsigned int instanceId = blockIdx.y * gridDim.x + blockIdx.x;
-    // unsigned int featureId = threadIdx.y * blockDim.x + threadIdx.x;
-    if (instanceId >= numInstances || threadIdx.x >= numFeatures) return;
+    if (instanceId >= numInstances) return;
     // if (threadIdx.x == 0) printf( "Instance ID: %u\n", instanceId );
 
     float dotProd = dWeightArr[numFeatures];
     const float* __restrict__ dFeaOffset = dFeatureMat + instanceId * numFeatures;
 
-    dotProd += shuffleParallelSum(
-        dWeightArr[threadIdx.x] * dFeaOffset[threadIdx.x],
-        numWarps );
+    __shared__ float sharedProd[512];
+    unsigned int offset = threadIdx.x * 2;
+    float partialSum = 0.0f;
+    if (offset < numFeatures)
+        partialSum += dWeightArr[offset] * dFeaOffset[offset];
+    if (offset + 1 < numFeatures)
+        partialSum += dWeightArr[offset + 1] * dFeaOffset[offset + 1];
+    sharedProd[threadIdx.x] = partialSum;
+    __syncthreads();
 
+    dotProd += parallelSum( sharedProd );
     if (threadIdx.x == 0) dCostArr[instanceId] = dotProd;
 }
 
@@ -149,7 +147,6 @@ __global__ void UpdateWeight(
     const float* __restrict__ dFeatureMatTrans,
     const unsigned int alpha,
     const unsigned int chunkSize,
-    const unsigned int numWarps,
     const unsigned int numInstances,
     const unsigned int numFeatures )
 {
@@ -164,18 +161,25 @@ __global__ void UpdateWeight(
     else
         stopId = chunkSize * (threadIdx.x + 1);
 
-    float multSum = 0.0;
+    float dotProd = 0.0;
     for (unsigned int i = chunkSize * threadIdx.x; i < stopId; i++)
-        multSum += dFeatureMatTrans[featureId * numInstances + i] * dCostArr[i];
-    multSum = shuffleParallelSum(
-        multSum,
-        numWarps );
+        dotProd += dFeatureMatTrans[featureId * numInstances + i] * dCostArr[i];
+
+    __shared__ float sharedProd[512];
+    sharedProd[threadIdx.x] = dotProd;
+    __syncthreads();
+
+    dotProd = parallelSum( sharedProd );
+
+    // dotProd = shuffleParallelSum(
+    //     dotProd,
+    //     numWarps );
 
     // Update weights
     if (threadIdx.x == 0)
     {
         dWeightArr[featureId] -=
-            alpha / (float) numInstances * multSum;
+            alpha / (float) numInstances * dotProd;
 
         if (featureId == 0)
             printf( "Updating weights completed, weight: %f\n", dWeightArr[0] );
@@ -244,7 +248,8 @@ int main()
     dim3 dotBlockDim;
     dim3 dotGridDim;
     // Assume numFeatures <= 1024 (max number of threads per block)
-    dotBlockDim.x = numFeatures;
+    // dotBlockDim.x = numFeatures;
+    dotBlockDim.x = 512;
     if (numInstances < 1024)
         dotGridDim.x = numInstances;
     else
@@ -252,8 +257,6 @@ int main()
         dotGridDim.x = 1024;
         dotGridDim.y = (numInstances + dotGridDim.x - 1) / dotGridDim.x;
     }
-    // Compute number of warps for shuffle reduction sum
-    unsigned int actNumWarps = (numFeatures + WARP_SIZE - 1) / WARP_SIZE;
 
     /*------- Determine block and grid size of ComputeCost kernel -------*/
     dim3 ccBlockDim;
@@ -282,9 +285,8 @@ int main()
     }
     uwBlockDim.x = uwNumChunks;
     uwGridDim.x = numFeatures;
-    // Compute number of warps for shuffle reduction sum
-    unsigned int uwNumWarps = (uwNumChunks + WARP_SIZE - 1) / WARP_SIZE;
 
+    // Gradient descent params
     unsigned int alpha = 50;
     unsigned int maxIter = 200;
     unsigned int iter = 0;
@@ -303,7 +305,6 @@ int main()
             dWeightArr,
             dFeatureMat,
             dClassArr,
-            actNumWarps,
             numInstances,
             numFeatures );
         cudaErrorCheck( cudaGetLastError() );
@@ -320,7 +321,6 @@ int main()
             dFeatureMatTrans,
             alpha,
             uwChunkSize,
-            uwNumWarps,
             numInstances,
             numFeatures );
         cudaErrorCheck( cudaGetLastError() );
@@ -340,7 +340,6 @@ int main()
     cudaFree( dClassArr );
     cudaFree( dWeightArr );
     cudaFree( dCostArr );
-
     free( node.weights );
 
     return 0;
