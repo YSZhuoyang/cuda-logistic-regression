@@ -310,22 +310,43 @@ __global__ void UpdateWeightL2(
 {
     if (blockIdx.x >= numFeatures) return;
 
-    // extern __shared__ float sharedPartSum[];
-    // unsigned int offset = threadIdx.x * 2;
-    // float sum = 0.0f;
-    // if (offset < partSumLen)
-    //     sum += dPartSumArr[offset];
-    // // else return;
-    // if (offset + 1 < partSumLen)
-    //     sum += dPartSumArr[offset + 1];
-    // sharedPartSum[threadIdx.x] = sum;
-    // __syncthreads();
+    float sum = 0.0f;
+    if (blockDim.x == 32)
+    {
+        if (threadIdx.x < partSumLen)
+            sum = dPartSumArr[blockIdx.x * partSumLen + threadIdx.x];
+        sum = parallelSum32( sum );
+    }
+    else
+    {
+        extern __shared__ float sharedPartSum[];
+        unsigned int offset = threadIdx.x * 2;
+        if (offset < partSumLen)
+            sum += dPartSumArr[offset];
+        if (offset + 1 < partSumLen)
+            sum += dPartSumArr[offset + 1];
+        sharedPartSum[threadIdx.x] = sum;
+        __syncthreads();
 
-    // sum = parallelSum( sharedPartSum );
+        switch (blockDim.x)
+        {
+            case 64:
+                sum = parallelSum64( sharedPartSum );
+                break;
+            case 128:
+                sum = parallelSum128( sharedPartSum );
+                break;
+            case 256:
+                sum = parallelSum256( sharedPartSum );
+                break;
+            case 512:
+                sum = parallelSum512( sharedPartSum );
+                break;
+            default:
+                break;
+        }
+    }
 
-    float sum = (threadIdx.x >= partSumLen) ?
-        0.0f : dPartSumArr[blockIdx.x * partSumLen + threadIdx.x];
-    sum = parallelSum32( sum );
     // Update weights
     if (threadIdx.x == 0)
     {
@@ -360,45 +381,82 @@ __global__ void UpdateWeight(
         offset = blockIdx.x * blockDim.x * 2 + threadIdx.x * 2;
     }
 
-    // unsigned int featureId = blockIdx.y;
-    // unsigned int offset = blockIdx.x * blockDim.x * 2 + threadIdx.x * 2;
     if (featureId >= numFeatures) return;
 
     const float* __restrict__ dFeaMatTransOffset =
         dFeatureMatTrans + featureId * numInstances;
-    __shared__ float sharedProd[512];
     float partialSum = 0.0;
-    if (offset < numInstances)
-        partialSum += dFeaMatTransOffset[offset] * dCostArr[offset];
-    if (offset + 1 < numInstances)
-        partialSum += dFeaMatTransOffset[offset + 1] * dCostArr[offset + 1];
-    sharedProd[threadIdx.x] = partialSum;
-    __syncthreads();
 
-    partialSum = parallelSum512( sharedProd );
-    if (threadIdx.x == 0)
-        dPartSumArr[featureId * partSumLen + blockIdx.x] = partialSum;
+    if (partSumLen == 1)
+    {
+        if (blockDim.x == 32)
+        {
+            if (threadIdx.x < partSumLen)
+                partialSum =
+                    dFeaMatTransOffset[offset] *
+                    dCostArr[offset];
+            partialSum = parallelSum32( partialSum );
+        }
+        else
+        {
+            extern __shared__ float sharedPartSum[];
+            if (offset < partSumLen)
+                partialSum += dFeaMatTransOffset[offset] *
+                    dCostArr[offset];
+            if (offset + 1 < partSumLen)
+                partialSum += dFeaMatTransOffset[offset + 1] *
+                    dCostArr[offset + 1];
+            sharedPartSum[threadIdx.x] = partialSum;
+            __syncthreads();
 
-    // One block per feature, one thread per group of instances
-    // unsigned int featureId = blockIdx.y * gridDim.x + blockIdx.x;
-    // // unsigned int instChunkId = threadIdx.y * blockDim.x + threadIdx.x;
-    // if (threadIdx.x >= numInstances || featureId >= numFeatures) return;
+            switch (blockDim.x)
+            {
+                case 64:
+                    partialSum = parallelSum64( sharedPartSum );
+                    break;
+                case 128:
+                    partialSum = parallelSum128( sharedPartSum );
+                    break;
+                case 256:
+                    partialSum = parallelSum256( sharedPartSum );
+                    break;
+                case 512:
+                    partialSum = parallelSum512( sharedPartSum );
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+    else
+    {
+        extern __shared__ float sharedPartSum[];
+        if (offset < numInstances)
+            partialSum += dFeaMatTransOffset[offset] * dCostArr[offset];
+        if (offset + 1 < numInstances)
+            partialSum += dFeaMatTransOffset[offset + 1] * dCostArr[offset + 1];
+        sharedPartSum[threadIdx.x] = partialSum;
+        __syncthreads();
 
-    // unsigned int stopId;
-    // if (threadIdx.x == blockDim.x - 1) // Last chunk
-    //     stopId = numInstances;
-    // else
-    //     stopId = chunkSize * (threadIdx.x + 1);
+        partialSum = parallelSum512( sharedPartSum );
+        if (threadIdx.x == 0)
+            dPartSumArr[featureId * partSumLen + blockIdx.x] = partialSum;
+    }
 
-    // float dotProd = 0.0;
-    // for (unsigned int i = chunkSize * threadIdx.x; i < stopId; i++)
-    //     dotProd += dFeatureMatTrans[featureId * numInstances + i] * dCostArr[i];
-
+    // const float* __restrict__ dFeaMatTransOffset =
+    //     dFeatureMatTrans + featureId * numInstances;
     // __shared__ float sharedProd[512];
-    // sharedProd[threadIdx.x] = dotProd;
+    // float partialSum = 0.0;
+    // if (offset < numInstances)
+    //     partialSum += dFeaMatTransOffset[offset] * dCostArr[offset];
+    // if (offset + 1 < numInstances)
+    //     partialSum += dFeaMatTransOffset[offset + 1] * dCostArr[offset + 1];
+    // sharedProd[threadIdx.x] = partialSum;
     // __syncthreads();
 
-    // dotProd = parallelSum( sharedProd );
+    // partialSum = parallelSum512( sharedProd );
+    // if (threadIdx.x == 0)
+    //     dPartSumArr[featureId * partSumLen + blockIdx.x] = partialSum;
 
     // // Update weights
     if (partSumLen == 1 && threadIdx.x == 0)
@@ -468,6 +526,8 @@ int main()
     dim3 uwBlockDimL2;
     dim3 uwGridDimL2;
     unsigned int partSumLen;
+    unsigned int sharedMemoSizeL1;
+    unsigned int sharedMemoSizeL2;
     // Assume numFeatures < 1024
     if (numInstances > 1024)
     {
@@ -475,23 +535,42 @@ int main()
         uwGridDimL1.x = (numInstances + 1023) / 1024;
         uwGridDimL1.y = numFeatures;
         partSumLen = uwGridDimL1.x;
+        sharedMemoSizeL1 = 512 * sizeof( float );
 
-        // Assume partSumLen <= 1024
-        if (partSumLen < 64) uwBlockDimL2.x = 32;
-        else if (partSumLen < 128) uwBlockDimL2.x = 64;
-        else if (partSumLen < 256) uwBlockDimL2.x = 128;
-        else if (partSumLen < 512) uwBlockDimL2.x = 256;
-        else uwBlockDimL2.x = 512;
         uwGridDimL2.x = numFeatures;
+        // Assume partSumLen <= 1024
+        if (partSumLen <= 32)
+        {
+            uwBlockDimL2.x = 32;
+            sharedMemoSizeL2 = 0;
+        }
+        else
+        {
+            if (partSumLen <= 64) uwBlockDimL2.x = 32;
+            else if (partSumLen <= 128) uwBlockDimL2.x = 64;
+            else if (partSumLen <= 256) uwBlockDimL2.x = 128;
+            else if (partSumLen <= 512) uwBlockDimL2.x = 256;
+            else uwBlockDimL2.x = 512;
+            sharedMemoSizeL2 = uwBlockDimL2.x * sizeof( float );
+        }
     }
     else
     {
         partSumLen = 1;
-        if (numInstances < 64) uwBlockDimL1.x = 32;
-        else if (numInstances < 128) uwBlockDimL1.x = 64;
-        else if (numInstances < 256) uwBlockDimL1.x = 128;
-        else if (numInstances < 512) uwBlockDimL1.x = 256;
         uwGridDimL1.x = numFeatures;
+        if (numInstances <= 32)
+        {
+            uwBlockDimL1.x = 32;
+            sharedMemoSizeL1 = 0;
+        }
+        else
+        {
+            if (numInstances <= 64) uwBlockDimL1.x = 32;
+            else if (numInstances <= 128) uwBlockDimL1.x = 64;
+            else if (numInstances <= 256) uwBlockDimL1.x = 128;
+            else if (numInstances <= 512) uwBlockDimL1.x = 256;
+            sharedMemoSizeL1 = uwBlockDimL1.x * sizeof( float );
+        }
     }
 
     float* dCostArr;
@@ -556,7 +635,7 @@ int main()
             numInstances );
         cudaErrorCheck( cudaGetLastError() );
 
-        UpdateWeight<<< uwGridDimL1, uwBlockDimL1 >>>(
+        UpdateWeight<<< uwGridDimL1, uwBlockDimL1, sharedMemoSizeL1 >>>(
             dWeightArr,
             dPartSumArr,
             dCostArr,
@@ -568,7 +647,7 @@ int main()
         cudaErrorCheck( cudaGetLastError() );
         if (partSumLen > 1)
         {
-            UpdateWeightL2<<< uwGridDimL2, uwBlockDimL2 >>>(
+            UpdateWeightL2<<< uwGridDimL2, uwBlockDimL2, sharedMemoSizeL2 >>>(
                 dWeightArr,
                 dPartSumArr,
                 alpha,
