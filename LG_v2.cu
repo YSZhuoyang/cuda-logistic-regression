@@ -43,17 +43,6 @@ void normalize(
     }
 }
 
-__device__ __forceinline__ float shuffleSum(
-    float sum )
-{
-    // Reduce final warp using shuffle
-    // Compile unroll for loop?
-    for (unsigned short shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
-        sum += __shfl_down( sum, shift );
-
-    return sum;
-}
-
 // Parallel sum combining shuffle and shared memory
 __device__ __forceinline__ float parallelSum(
     float* __restrict__ sharedData )
@@ -77,7 +66,6 @@ __device__ __forceinline__ float parallelSum(
     {
         sum += sharedData[threadIdx.x + 32];
         // Reduce final warp using shuffle
-        // Compile unroll for loop?
         for (unsigned short shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
             sum += __shfl_down( sum, shift );
     }
@@ -131,7 +119,6 @@ __global__ void Dot(
     float partialSum = 0.0f;
     if (offset < numFeatures)
         partialSum += dWeightArr[offset] * dFeaOffset[offset];
-    // else return;
     if (offset + 1 < numFeatures)
         partialSum += dWeightArr[offset + 1] * dFeaOffset[offset + 1];
     sharedProd[threadIdx.x] = partialSum;
@@ -154,108 +141,45 @@ __global__ void ComputeCost(
     dCostArr[instanceId] = cost;
 }
 
-__global__ void UpdateWeightL2(
-    float* __restrict__ dWeightArr,
-    const float* __restrict__ dPartSumArr,
-    const unsigned int alpha,
-    const unsigned int partSumLen,
-    const unsigned int numInstances,
-    const unsigned int numFeatures )
-{
-    if (blockIdx.x >= numFeatures) return;
-
-    // extern __shared__ float sharedPartSum[];
-    // unsigned int offset = threadIdx.x * 2;
-    // float sum = 0.0f;
-    // if (offset < partSumLen)
-    //     sum += dPartSumArr[offset];
-    // // else return;
-    // if (offset + 1 < partSumLen)
-    //     sum += dPartSumArr[offset + 1];
-    // sharedPartSum[threadIdx.x] = sum;
-    // __syncthreads();
-
-    // sum = parallelSum( sharedPartSum );
-
-    // float sum = (threadIdx.x >= partSumLen) ?
-    //     0.0f : dPartSumArr[blockIdx.x * partSumLen + threadIdx.x];
-    // __syncthreads();
-    // sum = shuffleSum( sum );
-    // Update weights
-    if (threadIdx.x == 0)
-    {
-        float sum = 0;
-        for (int i = 0; i < 32; i++)
-            sum += dPartSumArr[blockIdx.x * partSumLen + i];
-
-        dWeightArr[blockIdx.x] -=
-            alpha / (float) numInstances * sum;
-
-        if (blockIdx.x == 0)
-            printf( "Updating weights completed, weight: %f\n", sum );
-    }
-}
-
 __global__ void UpdateWeight(
     float* __restrict__ dWeightArr,
-    float* __restrict__ dPartSumArr,
     const float* __restrict__ dCostArr,
     const float* __restrict__ dFeatureMatTrans,
     const unsigned int alpha,
-    // const unsigned int chunkSize,
-    const unsigned int partSumLen,
+    const unsigned int chunkSize,
     const unsigned int numInstances,
-    const unsigned int numFeatures,
-    const bool levelTwoEnabled )
+    const unsigned int numFeatures )
 {
-    unsigned int featureId = blockIdx.y;
-    unsigned int offset = blockIdx.x * blockDim.x * 2 + threadIdx.x * 2;
-    if (offset >= numInstances || featureId >= numFeatures) return;
+    // One block per feature, one thread per group of instances
+    unsigned int featureId = blockIdx.y * gridDim.x + blockIdx.x;
+    // unsigned int instChunkId = threadIdx.y * blockDim.x + threadIdx.x;
+    if (threadIdx.x >= numInstances || featureId >= numFeatures) return;
 
-    const float* __restrict__ dFeaMatTransOffset =
-        dFeatureMatTrans + featureId * numInstances;
+    unsigned int stopId;
+    if (threadIdx.x == blockDim.x - 1) // Last chunk
+        stopId = numInstances;
+    else
+        stopId = chunkSize * (threadIdx.x + 1);
+
+    float dotProd = 0.0;
+    for (unsigned int i = chunkSize * threadIdx.x; i < stopId; i++)
+        dotProd += dFeatureMatTrans[featureId * numInstances + i] * dCostArr[i];
+
     __shared__ float sharedProd[512];
-    float partialSum = dFeaMatTransOffset[offset] * dCostArr[offset];
-    if (offset + 1 < numInstances)
-        partialSum += dFeaMatTransOffset[offset + 1] * dCostArr[offset + 1];
-    sharedProd[threadIdx.x] = partialSum;
+    sharedProd[threadIdx.x] = dotProd;
     __syncthreads();
 
-    partialSum = parallelSum( sharedProd );
+    dotProd = parallelSum( sharedProd );
+
+    // Update weights
     if (threadIdx.x == 0)
-        dPartSumArr[featureId * partSumLen + blockIdx.x] = partialSum;
+    {
+        dWeightArr[featureId] -=
+            alpha / (float) numInstances * dotProd;
 
-
-    // One block per feature, one thread per group of instances
-    // unsigned int featureId = blockIdx.y * gridDim.x + blockIdx.x;
-    // // unsigned int instChunkId = threadIdx.y * blockDim.x + threadIdx.x;
-    // if (threadIdx.x >= numInstances || featureId >= numFeatures) return;
-
-    // unsigned int stopId;
-    // if (threadIdx.x == blockDim.x - 1) // Last chunk
-    //     stopId = numInstances;
-    // else
-    //     stopId = chunkSize * (threadIdx.x + 1);
-
-    // float dotProd = 0.0;
-    // for (unsigned int i = chunkSize * threadIdx.x; i < stopId; i++)
-    //     dotProd += dFeatureMatTrans[featureId * numInstances + i] * dCostArr[i];
-
-    // __shared__ float sharedProd[512];
-    // sharedProd[threadIdx.x] = dotProd;
-    // __syncthreads();
-
-    // dotProd = parallelSum( sharedProd );
-
-    // // Update weights
-    // if (!levelTwoEnabled && threadIdx.x == 0)
-    // {
-    //     dWeightArr[featureId] -=
-    //         alpha / (float) numInstances * partialSum;
-
-    //     if (featureId == 0)
-    //         printf( "Updating weights completed, weight: %f\n", dWeightArr[0] );
-    // }
+        if (featureId == 0)
+            printf( "Updating weights completed, weight: %f\n", dotProd );
+    }
 }
 
 inline void cudaErrorCheck( cudaError_t cudaRes )
@@ -285,6 +209,37 @@ int main()
     normalize( featureVec, featureMat, featureMatTrans, numInstances );
     Node node = initNode( numFeatures );
 
+    float* dCostArr;
+    float* dWeightArr;
+    float* dFeatureMat;
+    float* dFeatureMatTrans;
+    unsigned short* dClassArr;
+    cudaErrorCheck( cudaMalloc( (void**) &dWeightArr, (numFeatures + 1) * sizeof( float ) ) );
+    cudaErrorCheck( cudaMalloc( (void**) &dCostArr, numInstances * sizeof( float ) ) );
+    cudaErrorCheck( cudaMalloc( (void**) &dFeatureMat, numInstances * numFeatures * sizeof( float ) ) );
+    cudaErrorCheck( cudaMalloc( (void**) &dFeatureMatTrans, numInstances * numFeatures * sizeof( float ) ) );
+    cudaErrorCheck( cudaMalloc( (void**) &dClassArr, numInstances * sizeof( unsigned short ) ) );
+    cudaErrorCheck( cudaMemcpyAsync(
+        dFeatureMat,
+        featureMat,
+        numInstances * numFeatures * sizeof( float ),
+        cudaMemcpyHostToDevice ) );
+    cudaErrorCheck( cudaMemcpyAsync(
+        dFeatureMatTrans,
+        featureMatTrans,
+        numInstances * numFeatures * sizeof( float ),
+        cudaMemcpyHostToDevice ) );
+    cudaErrorCheck( cudaMemcpyAsync(
+        dWeightArr,
+        node.weights,
+        (numFeatures + 1) * sizeof( float ),
+        cudaMemcpyHostToDevice ) );
+    cudaErrorCheck( cudaMemcpyAsync(
+        dClassArr,
+        classArr,
+        numInstances * sizeof( unsigned short ),
+        cudaMemcpyHostToDevice ) );
+
     /*----------- Determine block and grid size of Dot kernel -----------*/
     dim3 dotBlockDim;
     dim3 dotGridDim;
@@ -310,90 +265,22 @@ int main()
     else ccBlockDim.x = numInstances;
 
     /*------- Determine block and grid size of UpdateWeight kernel -------*/
-    dim3 uwBlockDimL1;
-    dim3 uwGridDimL1;
-    dim3 uwBlockDimL2;
-    dim3 uwGridDimL2;
-    bool levelTwoEnabled = false;
-    unsigned int partSumLen;
-    // Assume numFeatures < 1024
-    if (numInstances > 1024)
+    dim3 uwBlockDim;
+    dim3 uwGridDim;
+    unsigned int uwChunkSize;
+    unsigned int uwNumChunks;
+    if (numInstances > 512)
     {
-        uwBlockDimL1.x = 512;
-        uwGridDimL1.x = (numInstances + 1023) / 1024;
-        uwGridDimL1.y = numFeatures;
-        uwBlockDimL2.x = uwGridDimL1.x;
-        uwGridDimL2.x = numFeatures;
-        partSumLen = uwGridDimL1.x;
-        levelTwoEnabled = true;
+        uwNumChunks = 512;
+        uwChunkSize = numInstances / uwNumChunks;
     }
     else
     {
-        uwBlockDimL1.x = (numInstances + 1) / 2;
-        uwGridDimL1.x = numFeatures;
-        partSumLen = 1;
+        uwNumChunks = numInstances;
+        uwChunkSize = 1;
     }
-
-    // dim3 uwBlockDim;
-    // dim3 uwGridDim;
-    // unsigned int uwChunkSize;
-    // unsigned int uwNumChunks;
-    // if (numInstances > 1024)
-    // {
-    //     uwNumChunks = 512;
-    //     uwChunkSize = numInstances / uwNumChunks;
-    // }
-    // else
-    // {
-    //     uwNumChunks = numInstances;
-    //     uwChunkSize = 1;
-    // }
-    // uwBlockDim.x = uwNumChunks;
-    // uwGridDim.x = numFeatures;
-
-    /*------- Allocate device memory and copy host data to device -------*/
-    float* hPartArr = (float*) malloc( partSumLen * numFeatures * sizeof( float ) );
-    for (int i = 0; i < partSumLen * numFeatures; i++)
-        hPartArr[i] = 0.0f;
-
-    float* dCostArr;
-    float* dWeightArr;
-    float* dFeatureMat;
-    float* dFeatureMatTrans;
-    float* dPartSumArr;
-    unsigned short* dClassArr;
-    cudaErrorCheck( cudaMalloc( (void**) &dWeightArr, (numFeatures + 1) * sizeof( float ) ) );
-    cudaErrorCheck( cudaMalloc( (void**) &dCostArr, numInstances * sizeof( float ) ) );
-    cudaErrorCheck( cudaMalloc( (void**) &dFeatureMat, numInstances * numFeatures * sizeof( float ) ) );
-    cudaErrorCheck( cudaMalloc( (void**) &dFeatureMatTrans, numInstances * numFeatures * sizeof( float ) ) );
-    cudaErrorCheck( cudaMalloc( (void**) &dClassArr, numInstances * sizeof( unsigned short ) ) );
-    cudaErrorCheck( cudaMalloc( (void**) &dPartSumArr, partSumLen * numFeatures * sizeof( float ) ) );
-    // cudaErrorCheck( cudaMemset( dPartSumArr, 0, partSumLen * numFeatures * sizeof( float ) ) );
-    cudaErrorCheck( cudaMemcpyAsync(
-        dPartSumArr,
-        hPartArr,
-        partSumLen * numFeatures * sizeof( float ),
-        cudaMemcpyHostToDevice ) );
-    cudaErrorCheck( cudaMemcpyAsync(
-        dFeatureMat,
-        featureMat,
-        numInstances * numFeatures * sizeof( float ),
-        cudaMemcpyHostToDevice ) );
-    cudaErrorCheck( cudaMemcpyAsync(
-        dFeatureMatTrans,
-        featureMatTrans,
-        numInstances * numFeatures * sizeof( float ),
-        cudaMemcpyHostToDevice ) );
-    cudaErrorCheck( cudaMemcpyAsync(
-        dWeightArr,
-        node.weights,
-        (numFeatures + 1) * sizeof( float ),
-        cudaMemcpyHostToDevice ) );
-    cudaErrorCheck( cudaMemcpyAsync(
-        dClassArr,
-        classArr,
-        numInstances * sizeof( unsigned short ),
-        cudaMemcpyHostToDevice ) );
+    uwBlockDim.x = uwNumChunks;
+    uwGridDim.x = numFeatures;
 
     // Gradient descent params
     unsigned int alpha = 50;
@@ -424,29 +311,15 @@ int main()
             numInstances );
         cudaErrorCheck( cudaGetLastError() );
 
-        UpdateWeight<<< uwGridDimL1, uwBlockDimL1 >>>(
+        UpdateWeight<<< uwGridDim, uwBlockDim >>>(
             dWeightArr,
-            dPartSumArr,
             dCostArr,
             dFeatureMatTrans,
             alpha,
-            // uwChunkSize,
-            partSumLen,
+            uwChunkSize,
             numInstances,
-            numFeatures,
-            levelTwoEnabled );
+            numFeatures );
         cudaErrorCheck( cudaGetLastError() );
-        if (levelTwoEnabled)
-        {
-            UpdateWeightL2<<< uwGridDimL2, 32 >>>(
-                dWeightArr,
-                dPartSumArr,
-                alpha,
-                partSumLen,
-                numInstances,
-                numFeatures );
-            cudaErrorCheck( cudaGetLastError() );
-        }
     }
 
     cudaErrorCheck( cudaThreadSynchronize() );
@@ -463,8 +336,6 @@ int main()
     cudaFree( dClassArr );
     cudaFree( dWeightArr );
     cudaFree( dCostArr );
-    cudaFree( dPartSumArr );
-    free( hPartArr );
     free( node.weights );
 
     return 0;
