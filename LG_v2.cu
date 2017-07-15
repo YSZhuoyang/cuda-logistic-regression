@@ -205,6 +205,7 @@ int main()
     unsigned short* classArr = trainSetImporter.GetClassIndex();
     std::vector<NumericAttr> featureVec = trainSetImporter.GetFeatures();
     unsigned int numFeatures = featureVec.size();
+    numInstances = 2048;
 
     normalize( featureVec, featureMat, featureMatTrans, numInstances );
     Node node = initNode( numFeatures );

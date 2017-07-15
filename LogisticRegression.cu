@@ -43,19 +43,8 @@ void normalize(
     }
 }
 
-__device__ __forceinline__ float shuffleSum(
-    float sum )
-{
-    // Reduce final warp using shuffle
-    // Compile unroll for loop?
-    for (unsigned short shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
-        sum += __shfl_down( sum, shift );
-
-    return sum;
-}
-
 // Parallel sum combining shuffle and shared memory
-__device__ __forceinline__ float parallelSum(
+__device__ __forceinline__ float parallelSum512(
     float* __restrict__ sharedData )
 {
     float sum = sharedData[threadIdx.x];
@@ -111,6 +100,163 @@ __device__ __forceinline__ float parallelSum(
     return sum;
 }
 
+// Parallel sum combining shuffle and shared memory
+__device__ __forceinline__ float parallelSum256(
+    float* __restrict__ sharedData )
+{
+    float sum = sharedData[threadIdx.x];
+
+    if (threadIdx.x < 128)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 128];
+    __syncthreads();
+
+    if (threadIdx.x < 64)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 64];
+    __syncthreads();
+
+#if (__CUDA_ARCH__ >= 300)
+    if (threadIdx.x < 32)
+    {
+        sum += sharedData[threadIdx.x + 32];
+        // Reduce final warp using shuffle
+        // Compile unroll for loop?
+        for (unsigned short shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
+            sum += __shfl_down( sum, shift );
+    }
+#else
+    // fully unroll reduction within a single warp
+    if (threadIdx.x < 32)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 32];
+    __syncthreads();
+
+    if (threadIdx.x < 16)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 16];
+    __syncthreads();
+
+    if (threadIdx.x < 8)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 8];
+    __syncthreads();
+
+    if (threadIdx.x < 4)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 4];
+    __syncthreads();
+
+    if (threadIdx.x < 2)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 2];
+    __syncthreads();
+
+    if (threadIdx.x < 1)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 1];
+    __syncthreads();
+#endif
+
+    return sum;
+}
+
+// Parallel sum combining shuffle and shared memory
+__device__ __forceinline__ float parallelSum128(
+    float* __restrict__ sharedData )
+{
+    float sum = sharedData[threadIdx.x];
+
+    if (threadIdx.x < 64)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 64];
+    __syncthreads();
+
+#if (__CUDA_ARCH__ >= 300)
+    if (threadIdx.x < 32)
+    {
+        sum += sharedData[threadIdx.x + 32];
+        // Reduce final warp using shuffle
+        // Compile unroll for loop?
+        for (unsigned short shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
+            sum += __shfl_down( sum, shift );
+    }
+#else
+    // fully unroll reduction within a single warp
+    if (threadIdx.x < 32)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 32];
+    __syncthreads();
+
+    if (threadIdx.x < 16)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 16];
+    __syncthreads();
+
+    if (threadIdx.x < 8)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 8];
+    __syncthreads();
+
+    if (threadIdx.x < 4)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 4];
+    __syncthreads();
+
+    if (threadIdx.x < 2)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 2];
+    __syncthreads();
+
+    if (threadIdx.x < 1)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 1];
+    __syncthreads();
+#endif
+
+    return sum;
+}
+
+// Parallel sum combining shuffle and shared memory
+__device__ __forceinline__ float parallelSum64(
+    float* __restrict__ sharedData )
+{
+    float sum = sharedData[threadIdx.x];
+
+#if (__CUDA_ARCH__ >= 300)
+    if (threadIdx.x < 32)
+    {
+        sum += sharedData[threadIdx.x + 32];
+        // Reduce final warp using shuffle
+        // Compile unroll for loop?
+        for (unsigned short shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
+            sum += __shfl_down( sum, shift );
+    }
+#else
+    // fully unroll reduction within a single warp
+    if (threadIdx.x < 32)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 32];
+    __syncthreads();
+
+    if (threadIdx.x < 16)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 16];
+    __syncthreads();
+
+    if (threadIdx.x < 8)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 8];
+    __syncthreads();
+
+    if (threadIdx.x < 4)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 4];
+    __syncthreads();
+
+    if (threadIdx.x < 2)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 2];
+    __syncthreads();
+
+    if (threadIdx.x < 1)
+        sharedData[threadIdx.x] = sum = sum + sharedData[threadIdx.x + 1];
+    __syncthreads();
+#endif
+
+    return sum;
+}
+
+__device__ __forceinline__ float parallelSum32( float sum )
+{
+    // Reduce final warp using shuffle
+    // Compile unroll for loop?
+    for (unsigned short shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
+        sum += __shfl_down( sum, shift );
+
+    return sum;
+}
+
 __global__ void Dot(
     float* __restrict__ dCostArr,
     const float* __restrict__ dWeightArr,
@@ -137,7 +283,7 @@ __global__ void Dot(
     sharedProd[threadIdx.x] = partialSum;
     __syncthreads();
 
-    dotProd += parallelSum( sharedProd );
+    dotProd += parallelSum512( sharedProd );
     if (threadIdx.x == 0) dCostArr[instanceId] = dotProd;
 }
 
@@ -177,22 +323,17 @@ __global__ void UpdateWeightL2(
 
     // sum = parallelSum( sharedPartSum );
 
-    // float sum = (threadIdx.x >= partSumLen) ?
-    //     0.0f : dPartSumArr[blockIdx.x * partSumLen + threadIdx.x];
-    // __syncthreads();
-    // sum = shuffleSum( sum );
+    float sum = (threadIdx.x >= partSumLen) ?
+        0.0f : dPartSumArr[blockIdx.x * partSumLen + threadIdx.x];
+    sum = parallelSum32( sum );
     // Update weights
     if (threadIdx.x == 0)
     {
-        float sum = 0;
-        for (int i = 0; i < 32; i++)
-            sum += dPartSumArr[blockIdx.x * partSumLen + i];
-
         dWeightArr[blockIdx.x] -=
             alpha / (float) numInstances * sum;
 
         if (blockIdx.x == 0)
-            printf( "Updating weights completed, weight: %f\n", sum );
+            printf( "Updating weights completed, weight: %f\n", dWeightArr[0] );
     }
 }
 
@@ -202,29 +343,41 @@ __global__ void UpdateWeight(
     const float* __restrict__ dCostArr,
     const float* __restrict__ dFeatureMatTrans,
     const unsigned int alpha,
-    // const unsigned int chunkSize,
     const unsigned int partSumLen,
     const unsigned int numInstances,
-    const unsigned int numFeatures,
-    const bool levelTwoEnabled )
+    const unsigned int numFeatures )
 {
-    unsigned int featureId = blockIdx.y;
-    unsigned int offset = blockIdx.x * blockDim.x * 2 + threadIdx.x * 2;
-    if (offset >= numInstances || featureId >= numFeatures) return;
+    unsigned int featureId;
+    unsigned int offset;
+    if (partSumLen == 1)
+    {
+        featureId = blockIdx.x;
+        offset = threadIdx.x * 2;
+    }
+    else
+    {
+        featureId = blockIdx.y;
+        offset = blockIdx.x * blockDim.x * 2 + threadIdx.x * 2;
+    }
+
+    // unsigned int featureId = blockIdx.y;
+    // unsigned int offset = blockIdx.x * blockDim.x * 2 + threadIdx.x * 2;
+    if (featureId >= numFeatures) return;
 
     const float* __restrict__ dFeaMatTransOffset =
         dFeatureMatTrans + featureId * numInstances;
     __shared__ float sharedProd[512];
-    float partialSum = dFeaMatTransOffset[offset] * dCostArr[offset];
+    float partialSum = 0.0;
+    if (offset < numInstances)
+        partialSum += dFeaMatTransOffset[offset] * dCostArr[offset];
     if (offset + 1 < numInstances)
         partialSum += dFeaMatTransOffset[offset + 1] * dCostArr[offset + 1];
     sharedProd[threadIdx.x] = partialSum;
     __syncthreads();
 
-    partialSum = parallelSum( sharedProd );
+    partialSum = parallelSum512( sharedProd );
     if (threadIdx.x == 0)
         dPartSumArr[featureId * partSumLen + blockIdx.x] = partialSum;
-
 
     // One block per feature, one thread per group of instances
     // unsigned int featureId = blockIdx.y * gridDim.x + blockIdx.x;
@@ -248,14 +401,14 @@ __global__ void UpdateWeight(
     // dotProd = parallelSum( sharedProd );
 
     // // Update weights
-    // if (!levelTwoEnabled && threadIdx.x == 0)
-    // {
-    //     dWeightArr[featureId] -=
-    //         alpha / (float) numInstances * partialSum;
+    if (partSumLen == 1 && threadIdx.x == 0)
+    {
+        dWeightArr[featureId] -=
+            alpha / (float) numInstances * partialSum;
 
-    //     if (featureId == 0)
-    //         printf( "Updating weights completed, weight: %f\n", dWeightArr[0] );
-    // }
+        if (featureId == 0)
+            printf( "Updating weights completed, weight: %f\n", partialSum );
+    }
 }
 
 inline void cudaErrorCheck( cudaError_t cudaRes )
@@ -314,7 +467,6 @@ int main()
     dim3 uwGridDimL1;
     dim3 uwBlockDimL2;
     dim3 uwGridDimL2;
-    bool levelTwoEnabled = false;
     unsigned int partSumLen;
     // Assume numFeatures < 1024
     if (numInstances > 1024)
@@ -322,39 +474,25 @@ int main()
         uwBlockDimL1.x = 512;
         uwGridDimL1.x = (numInstances + 1023) / 1024;
         uwGridDimL1.y = numFeatures;
-        uwBlockDimL2.x = uwGridDimL1.x;
-        uwGridDimL2.x = numFeatures;
         partSumLen = uwGridDimL1.x;
-        levelTwoEnabled = true;
+
+        // Assume partSumLen <= 1024
+        if (partSumLen < 64) uwBlockDimL2.x = 32;
+        else if (partSumLen < 128) uwBlockDimL2.x = 64;
+        else if (partSumLen < 256) uwBlockDimL2.x = 128;
+        else if (partSumLen < 512) uwBlockDimL2.x = 256;
+        else uwBlockDimL2.x = 512;
+        uwGridDimL2.x = numFeatures;
     }
     else
     {
-        uwBlockDimL1.x = (numInstances + 1) / 2;
-        uwGridDimL1.x = numFeatures;
         partSumLen = 1;
+        if (numInstances < 64) uwBlockDimL1.x = 32;
+        else if (numInstances < 128) uwBlockDimL1.x = 64;
+        else if (numInstances < 256) uwBlockDimL1.x = 128;
+        else if (numInstances < 512) uwBlockDimL1.x = 256;
+        uwGridDimL1.x = numFeatures;
     }
-
-    // dim3 uwBlockDim;
-    // dim3 uwGridDim;
-    // unsigned int uwChunkSize;
-    // unsigned int uwNumChunks;
-    // if (numInstances > 1024)
-    // {
-    //     uwNumChunks = 512;
-    //     uwChunkSize = numInstances / uwNumChunks;
-    // }
-    // else
-    // {
-    //     uwNumChunks = numInstances;
-    //     uwChunkSize = 1;
-    // }
-    // uwBlockDim.x = uwNumChunks;
-    // uwGridDim.x = numFeatures;
-
-    /*------- Allocate device memory and copy host data to device -------*/
-    float* hPartArr = (float*) malloc( partSumLen * numFeatures * sizeof( float ) );
-    for (int i = 0; i < partSumLen * numFeatures; i++)
-        hPartArr[i] = 0.0f;
 
     float* dCostArr;
     float* dWeightArr;
@@ -368,12 +506,6 @@ int main()
     cudaErrorCheck( cudaMalloc( (void**) &dFeatureMatTrans, numInstances * numFeatures * sizeof( float ) ) );
     cudaErrorCheck( cudaMalloc( (void**) &dClassArr, numInstances * sizeof( unsigned short ) ) );
     cudaErrorCheck( cudaMalloc( (void**) &dPartSumArr, partSumLen * numFeatures * sizeof( float ) ) );
-    // cudaErrorCheck( cudaMemset( dPartSumArr, 0, partSumLen * numFeatures * sizeof( float ) ) );
-    cudaErrorCheck( cudaMemcpyAsync(
-        dPartSumArr,
-        hPartArr,
-        partSumLen * numFeatures * sizeof( float ),
-        cudaMemcpyHostToDevice ) );
     cudaErrorCheck( cudaMemcpyAsync(
         dFeatureMat,
         featureMat,
@@ -430,15 +562,13 @@ int main()
             dCostArr,
             dFeatureMatTrans,
             alpha,
-            // uwChunkSize,
             partSumLen,
             numInstances,
-            numFeatures,
-            levelTwoEnabled );
+            numFeatures );
         cudaErrorCheck( cudaGetLastError() );
-        if (levelTwoEnabled)
+        if (partSumLen > 1)
         {
-            UpdateWeightL2<<< uwGridDimL2, 32 >>>(
+            UpdateWeightL2<<< uwGridDimL2, uwBlockDimL2 >>>(
                 dWeightArr,
                 dPartSumArr,
                 alpha,
@@ -464,7 +594,6 @@ int main()
     cudaFree( dWeightArr );
     cudaFree( dCostArr );
     cudaFree( dPartSumArr );
-    free( hPartArr );
     free( node.weights );
 
     return 0;
