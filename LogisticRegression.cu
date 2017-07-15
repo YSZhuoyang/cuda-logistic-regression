@@ -43,6 +43,15 @@ void normalize(
     }
 }
 
+__device__ __forceinline__ float shuffleSum32( float sum )
+{
+    // Reduce final warp using shuffle
+    for (unsigned short shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
+        sum += __shfl_down( sum, shift );
+
+    return sum;
+}
+
 // Parallel sum combining shuffle and shared memory
 __device__ __forceinline__ float parallelSum512(
     float* __restrict__ sharedData )
@@ -66,9 +75,7 @@ __device__ __forceinline__ float parallelSum512(
     {
         sum += sharedData[threadIdx.x + 32];
         // Reduce final warp using shuffle
-        // Compile unroll for loop?
-        for (unsigned short shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
-            sum += __shfl_down( sum, shift );
+        sum = shuffleSum32( sum );
     }
 #else
     // fully unroll reduction within a single warp
@@ -119,9 +126,7 @@ __device__ __forceinline__ float parallelSum256(
     {
         sum += sharedData[threadIdx.x + 32];
         // Reduce final warp using shuffle
-        // Compile unroll for loop?
-        for (unsigned short shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
-            sum += __shfl_down( sum, shift );
+        sum = shuffleSum32( sum );
     }
 #else
     // fully unroll reduction within a single warp
@@ -168,9 +173,7 @@ __device__ __forceinline__ float parallelSum128(
     {
         sum += sharedData[threadIdx.x + 32];
         // Reduce final warp using shuffle
-        // Compile unroll for loop?
-        for (unsigned short shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
-            sum += __shfl_down( sum, shift );
+        sum = shuffleSum32( sum );
     }
 #else
     // fully unroll reduction within a single warp
@@ -213,9 +216,7 @@ __device__ __forceinline__ float parallelSum64(
     {
         sum += sharedData[threadIdx.x + 32];
         // Reduce final warp using shuffle
-        // Compile unroll for loop?
-        for (unsigned short shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
-            sum += __shfl_down( sum, shift );
+        sum = shuffleSum32( sum );
     }
 #else
     // fully unroll reduction within a single warp
@@ -247,16 +248,6 @@ __device__ __forceinline__ float parallelSum64(
     return sum;
 }
 
-__device__ __forceinline__ float parallelSum32( float sum )
-{
-    // Reduce final warp using shuffle
-    // Compile unroll for loop?
-    for (unsigned short shift = WARP_SIZE / 2; shift > 0; shift >>= 1)
-        sum += __shfl_down( sum, shift );
-
-    return sum;
-}
-
 __global__ void Dot(
     float* __restrict__ dCostArr,
     const float* __restrict__ dWeightArr,
@@ -277,7 +268,6 @@ __global__ void Dot(
     float partialSum = 0.0f;
     if (offset < numFeatures)
         partialSum += dWeightArr[offset] * dFeaOffset[offset];
-    // else return;
     if (offset + 1 < numFeatures)
         partialSum += dWeightArr[offset + 1] * dFeaOffset[offset + 1];
     sharedProd[threadIdx.x] = partialSum;
@@ -315,7 +305,7 @@ __global__ void UpdateWeightL2(
     {
         if (threadIdx.x < partSumLen)
             sum = dPartSumArr[blockIdx.x * partSumLen + threadIdx.x];
-        sum = parallelSum32( sum );
+        sum = shuffleSum32( sum );
     }
     else
     {
@@ -385,43 +375,41 @@ __global__ void UpdateWeight(
 
     const float* __restrict__ dFeaMatTransOffset =
         dFeatureMatTrans + featureId * numInstances;
-    float partialSum = 0.0;
+    float sum = 0.0;
 
     if (partSumLen == 1)
     {
         if (blockDim.x == 32)
         {
             if (threadIdx.x < partSumLen)
-                partialSum =
-                    dFeaMatTransOffset[offset] *
-                    dCostArr[offset];
-            partialSum = parallelSum32( partialSum );
+                sum = dFeaMatTransOffset[offset] * dCostArr[offset];
+            sum = shuffleSum32( sum );
         }
         else
         {
             extern __shared__ float sharedPartSum[];
-            if (offset < partSumLen)
-                partialSum += dFeaMatTransOffset[offset] *
+            if (offset < numInstances)
+                sum += dFeaMatTransOffset[offset] *
                     dCostArr[offset];
-            if (offset + 1 < partSumLen)
-                partialSum += dFeaMatTransOffset[offset + 1] *
+            if (offset + 1 < numInstances)
+                sum += dFeaMatTransOffset[offset + 1] *
                     dCostArr[offset + 1];
-            sharedPartSum[threadIdx.x] = partialSum;
+            sharedPartSum[threadIdx.x] = sum;
             __syncthreads();
 
             switch (blockDim.x)
             {
                 case 64:
-                    partialSum = parallelSum64( sharedPartSum );
+                    sum = parallelSum64( sharedPartSum );
                     break;
                 case 128:
-                    partialSum = parallelSum128( sharedPartSum );
+                    sum = parallelSum128( sharedPartSum );
                     break;
                 case 256:
-                    partialSum = parallelSum256( sharedPartSum );
+                    sum = parallelSum256( sharedPartSum );
                     break;
                 case 512:
-                    partialSum = parallelSum512( sharedPartSum );
+                    sum = parallelSum512( sharedPartSum );
                     break;
                 default:
                     break;
@@ -432,40 +420,25 @@ __global__ void UpdateWeight(
     {
         extern __shared__ float sharedPartSum[];
         if (offset < numInstances)
-            partialSum += dFeaMatTransOffset[offset] * dCostArr[offset];
+            sum += dFeaMatTransOffset[offset] * dCostArr[offset];
         if (offset + 1 < numInstances)
-            partialSum += dFeaMatTransOffset[offset + 1] * dCostArr[offset + 1];
-        sharedPartSum[threadIdx.x] = partialSum;
+            sum += dFeaMatTransOffset[offset + 1] * dCostArr[offset + 1];
+        sharedPartSum[threadIdx.x] = sum;
         __syncthreads();
 
-        partialSum = parallelSum512( sharedPartSum );
+        sum = parallelSum512( sharedPartSum );
         if (threadIdx.x == 0)
-            dPartSumArr[featureId * partSumLen + blockIdx.x] = partialSum;
+            dPartSumArr[featureId * partSumLen + blockIdx.x] = sum;
     }
-
-    // const float* __restrict__ dFeaMatTransOffset =
-    //     dFeatureMatTrans + featureId * numInstances;
-    // __shared__ float sharedProd[512];
-    // float partialSum = 0.0;
-    // if (offset < numInstances)
-    //     partialSum += dFeaMatTransOffset[offset] * dCostArr[offset];
-    // if (offset + 1 < numInstances)
-    //     partialSum += dFeaMatTransOffset[offset + 1] * dCostArr[offset + 1];
-    // sharedProd[threadIdx.x] = partialSum;
-    // __syncthreads();
-
-    // partialSum = parallelSum512( sharedProd );
-    // if (threadIdx.x == 0)
-    //     dPartSumArr[featureId * partSumLen + blockIdx.x] = partialSum;
 
     // // Update weights
     if (partSumLen == 1 && threadIdx.x == 0)
     {
         dWeightArr[featureId] -=
-            alpha / (float) numInstances * partialSum;
+            alpha / (float) numInstances * sum;
 
         if (featureId == 0)
-            printf( "Updating weights completed, weight: %f\n", partialSum );
+            printf( "Updating weights completed, weight: %f\n", dWeightArr[0] );
     }
 }
 
