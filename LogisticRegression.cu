@@ -171,10 +171,6 @@ __global__ void UpdateWeight(
 
     dotProd = parallelSum( sharedProd );
 
-    // dotProd = shuffleParallelSum(
-    //     dotProd,
-    //     numWarps );
-
     // Update weights
     if (threadIdx.x == 0)
     {
