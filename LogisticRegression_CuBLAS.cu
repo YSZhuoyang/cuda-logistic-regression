@@ -134,7 +134,7 @@ int main()
     time_t start, end;
     float dif;
     time( &start );
-    
+
     printf( "\nStart gradient descent...\n" );
 
     float alpha = 1.0f;

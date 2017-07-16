@@ -13,7 +13,6 @@ ArffImporter::~ArffImporter()
 {
     free( featureMat );
     free( featureMatTrans );
-    // free( instanceTable );
     free( classArr );
 
     for (char* classAttr : classVec) free( classAttr );

@@ -58,6 +58,8 @@ int main()
     double dif;
     time( &start );
     
+    printf( "\nStart gradient descent...\n" );
+
     // Gradient descent
     do
     {
