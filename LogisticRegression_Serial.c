@@ -1,55 +1,27 @@
 #include "Helper.h"
 #include "ArffImporter.h"
 
-#include <math.h>
-#include <stdlib.h>
-#include <string.h>
-
-
 
 Node initNode( unsigned int numFeatures )
 {
     Node node;
     node.numFeatures = numFeatures;
-    node.weights = (float*) malloc( (numFeatures + 1) * sizeof( float ) );
-    memset( node.weights, 1, (numFeatures + 1) * sizeof( float ) );
+    node.weights = (float*) malloc( numFeatures * sizeof( float ) );
+    memset( node.weights, 0, numFeatures * sizeof( float ) );
 
     return node;
-}
-
-void normalize(
-    std::vector<NumericAttr> featureVec,
-    float* featureMat,
-    unsigned int numInstances )
-{
-    unsigned int numFeatures = featureVec.size();
-
-    for (unsigned int i = 0; i < numFeatures; i++)
-    {
-        // Use either range / standard deviation
-        float range = featureVec[i].max - featureVec[i].min;
-        if (range == 0.0) continue;
-
-        for (unsigned int j = 0; j < numInstances; j++)
-        {
-            unsigned int featureIndex = j * numFeatures + i;
-            featureMat[featureIndex] =
-                (featureMat[featureIndex] - featureVec[i].mean) / range;
-        }
-    }
 }
 
 inline float activate(
     Node* node,
     float* inputArr )
 {
-    float linearRes = node->weights[node->numFeatures];
+    float linearRes = 0.0f;
     node->inputs = inputArr;
 
     unsigned int numFeatures = node->numFeatures;
     for (unsigned int i = 0; i < numFeatures; i++)
         linearRes += node->weights[i] * node->inputs[i];
-
     node->output = 1.0 / (1.0 + exp(-linearRes));
 
     return node->output;
@@ -69,20 +41,17 @@ int main()
     // ArffImporter testSetImporter;
     // testSetImporter.Read( "Dataset/test/dev-first1000.arff" );
 
-    unsigned int numInst = trainSetImporter.GetNumInstances();
     float* featureMat = trainSetImporter.GetFeatureMat();
     unsigned short* classArr = trainSetImporter.GetClassIndex();
-    std::vector<NumericAttr> featureVec = trainSetImporter.GetFeatures();
-    unsigned int numFeatures = featureVec.size();
-
-    normalize( featureVec, featureMat, numInst );
-
+    unsigned int numInst = trainSetImporter.GetNumInstances();
+    unsigned int numFeatures = trainSetImporter.GetNumFeatures();
     Node node = initNode( numFeatures );
+
     unsigned int iter = 0;
-    unsigned int maxIter = 200;
+    unsigned int maxIter = 1000;
     float costSumPre = 0.0;
     float deltaCostSum = 0.0;
-    float alpha = 50.0;
+    float alpha = 10.0;
     float* batchArr = (float*) malloc( numFeatures * sizeof( float ) );
 
     time_t start, end;
@@ -107,21 +76,23 @@ int main()
         deltaCostSum = costSumPre - costSumNew;
         costSumPre = costSumNew;
 
+        // printf( "Total cost: %f\n", costSumNew );
         // printf( "Delta cost: %f\n", deltaCostSum );
+        // printf( "Weight: %f\n", node.weights[0] );
 
         // Update weights
-        printf( "Weight: %f\n", node.weights[0] );
         for (unsigned int j = 0; j < numFeatures; j++)
             node.weights[j] -= alpha / (float) numInst * batchArr[j];
-        
+
         iter++;
     }
-    while (iter == 1 || (deltaCostSum > 1.0 && iter < maxIter));
+    while (iter == 1 || (deltaCostSum > 0.05f && iter < maxIter));
 
     time( &end );
     dif = difftime( end, start );
-
     printf( "Time taken is %.2lf seconds.\n", dif );
-    
+
+    printf( "Weight: %f\n", node.weights[0] );
+
     return 0;
 }

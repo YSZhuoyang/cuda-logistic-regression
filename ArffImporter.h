@@ -33,16 +33,17 @@ public:
     float* GetFeatureMatTrans();
     unsigned short* GetClassIndex();
     unsigned int GetNumInstances();
+    unsigned int GetNumFeatures();
 
 
 private:
-    void BuildInstanceTable();
+    void BuildFeatureMatrix();
+    void normalize();
 
     std::vector<char*> classVec;
     std::vector<NumericAttr> featureVec;
     std::vector<Instance> instanceVec;
 
-    // Instance* instanceTable        = nullptr;
     float* featureMat        = nullptr;
     float* featureMatTrans   = nullptr;
     unsigned short* classArr = nullptr;

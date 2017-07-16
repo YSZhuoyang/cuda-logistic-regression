@@ -4,41 +4,17 @@
 #include <cublas_v2.h>
 
 
-#define MAX_ITER      200
-#define LEARNING_RATE 50.0f
+#define MAX_ITER      1000
+#define LEARNING_RATE 10.0f
 
 Node initNode( unsigned int numFeatures )
 {
     Node node;
     node.numFeatures = numFeatures;
-    node.weights = (float*) malloc( (numFeatures + 1) * sizeof( float ) );
-    memset( node.weights, 0, (numFeatures + 1) * sizeof( float ) );
+    node.weights = (float*) malloc( numFeatures * sizeof( float ) );
+    memset( node.weights, 0, numFeatures * sizeof( float ) );
 
     return node;
-}
-
-void normalize(
-    std::vector<NumericAttr> featureVec,
-    float* featureMat,
-    float* featureMatTrans,
-    unsigned int numInstances )
-{
-    unsigned int numFeatures = featureVec.size();
-
-    for (unsigned int i = 0; i < numFeatures; i++)
-    {
-        // Use either range / standard deviation
-        float range = featureVec[i].max - featureVec[i].min;
-        if (range == 0.0) continue;
-
-        for (unsigned int j = 0; j < numInstances; j++)
-        {
-            unsigned int featureIndex = j * numFeatures + i;
-            featureMat[featureIndex] =
-                (featureMat[featureIndex] - featureVec[i].mean) / range;
-            featureMatTrans[i * numInstances + j] = featureMat[featureIndex];
-        }
-    }
 }
 
 __global__ void ComputeCost(
@@ -52,22 +28,6 @@ __global__ void ComputeCost(
     float cost = dCostArr[instanceId];
     cost = 1.0 / (1.0 + exp(-cost)) - (float) dClassArr[instanceId];
     dCostArr[instanceId] = cost;
-}
-
-__global__ void UpdateWeight(
-    float* __restrict__ dWeightArr,
-    const float* __restrict__ dFeaCostProdArr,
-    const float updateWParam,
-    const unsigned int numInstances,
-    const unsigned int numFeatures )
-{
-    unsigned int featureId = blockIdx.x * blockDim.x + threadIdx.x;
-    if (featureId >= numFeatures) return;
-
-    dWeightArr[featureId] -= updateWParam * dFeaCostProdArr[featureId];
-
-    if (featureId == 0)
-        printf( "Updating weights completed, weight: %f\n", dWeightArr[0] );
 }
 
 inline void cudaErrorCheck( cudaError_t cudaStatus )
@@ -118,25 +78,40 @@ int main()
     // ArffImporter testSetImporter;
     // testSetImporter.Read( "Dataset/test/dev-first1000.arff" );
 
-    unsigned int numInstances = trainSetImporter.GetNumInstances();
-    float* featureMat = trainSetImporter.GetFeatureMat();
+    // Init host data
     float* featureMatTrans = trainSetImporter.GetFeatureMatTrans();
     unsigned short* classArr = trainSetImporter.GetClassIndex();
-    std::vector<NumericAttr> featureVec = trainSetImporter.GetFeatures();
-    unsigned int numFeatures = featureVec.size();
-
-    normalize( featureVec, featureMat, featureMatTrans, numInstances );
+    unsigned int numInstances = trainSetImporter.GetNumInstances();
+    unsigned int numFeatures = trainSetImporter.GetNumFeatures();
     Node node = initNode( numFeatures );
 
-    /* Determine block and grid size of UpdateWeight kernel */
-    dim3 uwBlockDim;
-    dim3 uwGridDim;
-    if (numFeatures > 1024)
-    {
-        uwBlockDim.x = 1024;
-        uwGridDim.x = (numInstances + 1023) / 1024;
-    }
-    else uwBlockDim.x = numFeatures;
+    // Init device data
+    float* dCostArr = nullptr;
+    float* dWeightArr = nullptr;
+    float* dFeatureMatTrans = nullptr;
+    float* dFeaCostProdArr = nullptr;
+    unsigned short* dClassArr = nullptr;
+    // One instance per row, one feature per column, as cublas prefers column-major matrix
+    cudaErrorCheck( cudaMalloc( (void**) &dFeatureMatTrans, numInstances * numFeatures * sizeof( float ) ) );
+    cudaErrorCheck( cudaMalloc( (void**) &dWeightArr, numFeatures * sizeof( float ) ) );
+    cudaErrorCheck( cudaMalloc( (void**) &dCostArr, numInstances * sizeof( float ) ) );
+    cudaErrorCheck( cudaMalloc( (void**) &dClassArr, numInstances * sizeof( unsigned short ) ) );
+    cudaErrorCheck( cudaMalloc( (void**) &dFeaCostProdArr, numFeatures * sizeof( float ) ) );
+    cudaErrorCheck( cudaMemcpyAsync(
+        dFeatureMatTrans,
+        featureMatTrans,
+        numInstances * numFeatures * sizeof( float ),
+        cudaMemcpyHostToDevice ) );
+    cudaErrorCheck( cudaMemcpyAsync(
+        dWeightArr,
+        node.weights,
+        numFeatures * sizeof( float ),
+        cudaMemcpyHostToDevice ) );
+    cudaErrorCheck( cudaMemcpyAsync(
+        dClassArr,
+        classArr,
+        numInstances * sizeof( unsigned short ),
+        cudaMemcpyHostToDevice ) );
 
     /* Determine block and grid size of ComputeCost kernel */
     dim3 ccBlockDim;
@@ -152,57 +127,8 @@ int main()
     cublasHandle_t cublasHandle;
     cublasErrorCheck( cublasCreate( &cublasHandle ) );
 
-    // Init host data
-    float* biasArr = (float*) malloc( numInstances * sizeof( float ) );
-    for (unsigned int i = 0; i < numInstances; i++)
-        biasArr[i] = node.weights[0];
-
-    // Init device data
-    float* dBiasArr = nullptr;
-    float* dCostArr = nullptr;
-    float* dWeightArr = nullptr;
-    float* dFeatureMat = nullptr;
-    float* dFeatureMatTrans = nullptr;
-    float* dFeaCostProdArr = nullptr;
-    unsigned short* dClassArr = nullptr;
-    // One feature per row, one instance per column
-    cudaErrorCheck( cudaMalloc( (void**) &dFeatureMat, numInstances * numFeatures * sizeof( float ) ) );
-    // One instance per row, one feature per column
-    cudaErrorCheck( cudaMalloc( (void**) &dFeatureMatTrans, numInstances * numFeatures * sizeof( float ) ) );
-    cudaErrorCheck( cudaMalloc( (void**) &dWeightArr, numFeatures * sizeof( float ) ) );
-    cudaErrorCheck( cudaMalloc( (void**) &dCostArr, numInstances * sizeof( float ) ) );
-    cudaErrorCheck( cudaMalloc( (void**) &dBiasArr, numInstances * sizeof( float ) ) );
-    cudaErrorCheck( cudaMalloc( (void**) &dClassArr, numInstances * sizeof( unsigned short ) ) );
-    cudaErrorCheck( cudaMalloc( (void**) &dFeaCostProdArr, numFeatures * sizeof( float ) ) );
-    cudaErrorCheck( cudaMemcpyAsync(
-        dFeatureMat,
-        featureMat,
-        numInstances * numFeatures * sizeof( float ),
-        cudaMemcpyHostToDevice ) );
-    cudaErrorCheck( cudaMemcpyAsync(
-        dFeatureMatTrans,
-        featureMatTrans,
-        numInstances * numFeatures * sizeof( float ),
-        cudaMemcpyHostToDevice ) );
-    cudaErrorCheck( cudaMemcpyAsync(
-        dWeightArr,
-        // First element is used as bias, start from the second one
-        node.weights + 1,
-        numFeatures * sizeof( float ),
-        cudaMemcpyHostToDevice ) );
-    cudaErrorCheck( cudaMemcpyAsync(
-        dClassArr,
-        classArr,
-        numInstances * sizeof( unsigned short ),
-        cudaMemcpyHostToDevice ) );
-    cudaErrorCheck( cudaMemcpyAsync(
-        dBiasArr,
-        biasArr,
-        numInstances * sizeof( float ),
-        cudaMemcpyHostToDevice ) );
-
     // Gradient descent params
-    float updateWParam = LEARNING_RATE / (float) numInstances;
+    float updateWParam = -LEARNING_RATE / (float) numInstances;
     unsigned int iter = 0;
 
     time_t start, end;
@@ -212,17 +138,10 @@ int main()
     printf( "\nStart gradient descent...\n" );
 
     float alpha = 1.0f;
-    float preBeta = 1.0f;
-    float uwBeta = 0.0f;
+    float beta = 0.0f;
     // Gradient descent
     while (iter++ < MAX_ITER)
     {
-        // Reset dCostArr with Bias
-        cudaErrorCheck( cudaMemcpyAsync(
-            dCostArr,
-            dBiasArr,
-            numInstances * sizeof( float ),
-            cudaMemcpyDeviceToDevice ) );
         // Predict
         cublasErrorCheck( cublasSgemv(
             cublasHandle,
@@ -234,43 +153,43 @@ int main()
             numInstances,
             dWeightArr,
             1,
-            &preBeta,
+            &beta,
             dCostArr,
             1 ) );
-
         ComputeCost<<< ccGridDim, ccBlockDim >>>(
             dCostArr,
             dClassArr,
             numInstances );
         cudaErrorCheck( cudaGetLastError() );
-
-        // Cost vec dot FeaMat
+        // Cost vec dot FeaMat-Transpose
         cublasErrorCheck( cublasSgemv(
             cublasHandle,
-            CUBLAS_OP_N,
-            numFeatures,
+            CUBLAS_OP_T,
             numInstances,
-            &alpha,
-            dFeatureMat,
             numFeatures,
+            &alpha,
+            dFeatureMatTrans,
+            numInstances,
             dCostArr,
             1,
-            &uwBeta,
+            &beta,
             dFeaCostProdArr,
             1 ) );
-        UpdateWeight<<< uwGridDim, uwBlockDim >>>(
-            dWeightArr,
+        // Update weights
+        cublasErrorCheck( cublasSaxpy(
+            cublasHandle,
+            numFeatures,
+            &updateWParam,
             dFeaCostProdArr,
-            updateWParam,
-            numInstances,
-            numFeatures );
-        cudaErrorCheck( cudaGetLastError() );
+            1,
+            dWeightArr,
+            1 ) );
     }
     cudaErrorCheck( cudaThreadSynchronize() );
 
     cublasErrorCheck( cublasDestroy( cublasHandle ) );
     cudaMemcpy(
-        node.weights + 1,
+        node.weights,
         dWeightArr,
         numFeatures * sizeof( float ),
         cudaMemcpyDeviceToHost );
@@ -279,15 +198,14 @@ int main()
     dif = difftime( end, start );
     printf( "Time taken is %.2lf seconds.\n", dif );
 
-    cudaFree( dFeatureMat );
+    printf( "Updating weights completed, weight: %f\n", node.weights[0] );
+
     cudaFree( dFeatureMatTrans );
     cudaFree( dClassArr );
     cudaFree( dWeightArr );
     cudaFree( dCostArr );
     cudaFree( dFeaCostProdArr );
-    cudaFree( dBiasArr );
     free( node.weights );
-    free( biasArr );
 
     return 0;
 }

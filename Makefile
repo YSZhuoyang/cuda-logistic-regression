@@ -25,8 +25,8 @@ Helper.o: Helper.c Helper.h BasicDataStructures.h
 ArffImporter.o: ArffImporter.cpp ArffImporter.h BasicDataStructures.h Helper.h
 	$(CC) ${CFLAGS} -c ArffImporter.cpp
 
-# exec: ${OBJECTS} LogisticRegression.c
-# 	$(CC) ${CFLAGS} -o $@ ${OBJECTS} LogisticRegression.c
+# exec: ${OBJECTS} LogisticRegression_Serial.c
+# 	$(CC) ${CFLAGS} -o $@ ${OBJECTS} LogisticRegression_Serial.c
 
 # Helper.o: Helper.c Helper.h BasicDataStructures.h
 # 	$(CC) ${CFLAGS} -c Helper.c

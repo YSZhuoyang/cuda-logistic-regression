@@ -23,49 +23,70 @@ ArffImporter::~ArffImporter()
     featureVec.clear();
 }
 
-void ArffImporter::BuildInstanceTable()
+void ArffImporter::BuildFeatureMatrix()
 {
     if (featureMat != nullptr || featureMatTrans != nullptr)
         return;
-    
+
+    // Include X0 to be multiplied with bias    
+    numFeatures++;
     featureMat =
         (float*) malloc( numInstances * numFeatures * sizeof( float ) );
     featureMatTrans =
         (float*) malloc( numInstances * numFeatures * sizeof( float ) );
-    // instanceTable = (Instance*) malloc( numInstances * sizeof( Instance ) );
     classArr =
         (unsigned short*) malloc( numInstances * sizeof( unsigned short ) );
     // for (unsigned int i = 0; i < numInstances; i++)
     // {
     //     float* offset = featureMat + i * numFeatures;
+    //     // Set X0 to 1
+    //     offset[0] = 1.0f;
     //     memmove(
-    //         offset,
+    //         offset + 1,
     //         instanceVec[i].featureAttrArray,
-    //         numFeatures * sizeof( float ) );
+    //         (numFeatures - 1) * sizeof( float ) );
     //     classArr[i] = instanceVec[i].classIndex;
     //     free( instanceVec[i].featureAttrArray );
     // }
 
-    // // Build transpose matrix
-    // for (unsigned int r = 0; r < numInstances; r++)
-    //     for (unsigned int c = 0; c < numFeatures; c++)
-    //         featureMatTrans[c * numInstances + r] = featureMat[r * numFeatures + c];
-
     for (unsigned int i = 0; i < numInstances; i++)
     {
-        for (unsigned int j = 0; j < numFeatures; j++)
+        // Set X0 to 1
+        featureMat[i * numFeatures] = 1;
+        featureMatTrans[i] = 1;
+        for (unsigned int j = 1; j < numFeatures; j++)
         {
             featureMat[i * numFeatures + j] =
-                instanceVec[i].featureAttrArray[j];
+                instanceVec[i].featureAttrArray[j - 1];
             featureMatTrans[j * numInstances + i] =
-                instanceVec[i].featureAttrArray[j];
+                instanceVec[i].featureAttrArray[j - 1];
         }
 
         classArr[i] = instanceVec[i].classIndex;
         free( instanceVec[i].featureAttrArray );
     }
 
+    normalize();
     instanceVec.clear();
+}
+
+// Do not normalize X0
+void ArffImporter::normalize()
+{
+    for (unsigned int i = 1; i < numFeatures; i++)
+    {
+        // Use either range / standard deviation
+        float range = featureVec[i - 1].max - featureVec[i - 1].min;
+        if (range == 0.0) continue;
+
+        for (unsigned int j = 0; j < numInstances; j++)
+        {
+            unsigned int featureIndex = j * numFeatures + i;
+            featureMat[featureIndex] =
+                (featureMat[featureIndex] - featureVec[i - 1].mean) / range;
+            featureMatTrans[i * numInstances + j] = featureMat[featureIndex];
+        }
+    }
 }
 
 // Need to check string length boundary
@@ -207,10 +228,8 @@ void ArffImporter::Read( const char* fileName )
 
     numInstances = instanceVec.size();
 
-    // printf( "test\n" );
-
     fclose( fp );
-    BuildInstanceTable();
+    BuildFeatureMatrix();
 }
 
 std::vector<char*> ArffImporter::GetClassAttr()
@@ -241,4 +260,9 @@ unsigned short* ArffImporter::GetClassIndex()
 unsigned int ArffImporter::GetNumInstances()
 {
     return numInstances;
+}
+
+unsigned int ArffImporter::GetNumFeatures()
+{
+    return numFeatures;
 }
