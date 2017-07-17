@@ -38,7 +38,8 @@ public:
 
 private:
     void BuildFeatureMatrix();
-    void normalize();
+    void Normalize();
+    void Transpose();
 
     std::vector<char*> classVec;
     std::vector<NumericAttr> featureVec;

@@ -35,43 +35,27 @@ void ArffImporter::BuildFeatureMatrix()
         (float*) malloc( numInstances * numFeatures * sizeof( float ) );
     classArr =
         (unsigned short*) malloc( numInstances * sizeof( unsigned short ) );
-    // for (unsigned int i = 0; i < numInstances; i++)
-    // {
-    //     float* offset = featureMat + i * numFeatures;
-    //     // Set X0 to 1
-    //     offset[0] = 1.0f;
-    //     memmove(
-    //         offset + 1,
-    //         instanceVec[i].featureAttrArray,
-    //         (numFeatures - 1) * sizeof( float ) );
-    //     classArr[i] = instanceVec[i].classIndex;
-    //     free( instanceVec[i].featureAttrArray );
-    // }
-
     for (unsigned int i = 0; i < numInstances; i++)
     {
+        float* offset = featureMat + i * numFeatures;
         // Set X0 to 1
-        featureMat[i * numFeatures] = 1;
-        featureMatTrans[i] = 1;
-        for (unsigned int j = 1; j < numFeatures; j++)
-        {
-            featureMat[i * numFeatures + j] =
-                instanceVec[i].featureAttrArray[j - 1];
-            featureMatTrans[j * numInstances + i] =
-                instanceVec[i].featureAttrArray[j - 1];
-        }
-
+        offset[0] = 1.0f;
+        memmove(
+            offset + 1,
+            instanceVec[i].featureAttrArray,
+            (numFeatures - 1) * sizeof( float ) );
         classArr[i] = instanceVec[i].classIndex;
         free( instanceVec[i].featureAttrArray );
     }
 
-    normalize();
+    Normalize();
+    Transpose();
     instanceVec.clear();
 }
 
-// Do not normalize X0
-void ArffImporter::normalize()
+void ArffImporter::Normalize()
 {
+    // Do not normalize X0
     for (unsigned int i = 1; i < numFeatures; i++)
     {
         // Use either range / standard deviation
@@ -83,9 +67,16 @@ void ArffImporter::normalize()
             unsigned int featureIndex = j * numFeatures + i;
             featureMat[featureIndex] =
                 (featureMat[featureIndex] - featureVec[i - 1].mean) / range;
-            featureMatTrans[i * numInstances + j] = featureMat[featureIndex];
         }
     }
+}
+
+void ArffImporter::Transpose()
+{
+    for (unsigned int i = 0; i < numInstances; i++)
+        for (unsigned int j = 0; j < numFeatures; j++)
+            featureMatTrans[j * numInstances + i] =
+                featureMat[i * numFeatures + j];
 }
 
 // Need to check string length boundary

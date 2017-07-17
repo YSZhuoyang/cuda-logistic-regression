@@ -26,7 +26,7 @@ __global__ void ComputeCost(
     if (instanceId >= numInstances) return;
 
     float cost = dCostArr[instanceId];
-    cost = 1.0 / (1.0 + exp(-cost)) - (float) dClassArr[instanceId];
+    cost = 1.0f / (1.0f + expf(-cost)) - (float) dClassArr[instanceId];
     dCostArr[instanceId] = cost;
 }
 
@@ -91,7 +91,7 @@ int main()
     float* dFeatureMatTrans = nullptr;
     float* dFeaCostProdArr = nullptr;
     unsigned short* dClassArr = nullptr;
-    // One instance per row, one feature per column, as cublas prefers column-major matrix
+    // One instance per row, one feature per column, as cublas prefers column-major matrix (faster)
     cudaErrorCheck( cudaMalloc( (void**) &dFeatureMatTrans, numInstances * numFeatures * sizeof( float ) ) );
     cudaErrorCheck( cudaMalloc( (void**) &dWeightArr, numFeatures * sizeof( float ) ) );
     cudaErrorCheck( cudaMalloc( (void**) &dCostArr, numInstances * sizeof( float ) ) );
@@ -116,10 +116,10 @@ int main()
     /* Determine block and grid size of ComputeCost kernel */
     dim3 ccBlockDim;
     dim3 ccGridDim;
-    if (numInstances > 1024)
+    if (numInstances > 128)
     {
-        ccBlockDim.x = 1024;
-        ccGridDim.x = (numInstances + 1023) / 1024;
+        ccBlockDim.x = 128;
+        ccGridDim.x = (numInstances + 127) / 128;
     }
     else ccBlockDim.x = numInstances;
 

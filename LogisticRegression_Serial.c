@@ -22,7 +22,7 @@ inline float activate(
     unsigned int numFeatures = node->numFeatures;
     for (unsigned int i = 0; i < numFeatures; i++)
         linearRes += node->weights[i] * node->inputs[i];
-    node->output = 1.0 / (1.0 + exp(-linearRes));
+    node->output = 1.0 / (1.0 + expf(-linearRes));
 
     return node->output;
 }
