@@ -137,23 +137,23 @@ int main()
 
     printf( "\nStart gradient descent...\n" );
 
-    float alpha = 1.0f;
-    float beta = 0.0f;
+    float default_alpha = 1.0f;
+    float default_beta = 0.0f;
     // Gradient descent
     while (iter++ < MAX_ITER)
     {
-        // Predict
+        // Classify
         cublasErrorCheck( cublasSgemv(
             cublasHandle,
             CUBLAS_OP_N,
             numInstances,
             numFeatures,
-            &alpha,
+            &default_alpha,
             dFeatureMatTrans,
             numInstances,
             dWeightArr,
             1,
-            &beta,
+            &default_beta,
             dCostArr,
             1 ) );
         ComputeCost<<< ccGridDim, ccBlockDim >>>(
@@ -167,12 +167,12 @@ int main()
             CUBLAS_OP_T,
             numInstances,
             numFeatures,
-            &alpha,
+            &default_alpha,
             dFeatureMatTrans,
             numInstances,
             dCostArr,
             1,
-            &beta,
+            &default_beta,
             dFeaCostProdArr,
             1 ) );
         // Update weights
