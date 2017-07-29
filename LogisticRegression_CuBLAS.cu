@@ -188,11 +188,11 @@ int main()
     cudaErrorCheck( cudaThreadSynchronize() );
 
     cublasErrorCheck( cublasDestroy( cublasHandle ) );
-    cudaMemcpy(
+    cudaErrorCheck( cudaMemcpy(
         node.weights,
         dWeightArr,
         numFeatures * sizeof( float ),
-        cudaMemcpyDeviceToHost );
+        cudaMemcpyDeviceToHost ) );
 
     time( &end );
     dif = difftime( end, start );
